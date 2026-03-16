@@ -38,7 +38,6 @@ LP_FAVORED_SECTOR = {
     "core_right": 30.0,
     "good_left": 300.0,
     "good_right": 60.0,
-    "center": 0.0,
 }
 
 ICE_POINTS = [
@@ -219,10 +218,31 @@ def haversine_km(lon1, lat1, lon2, lat2):
     return r * c
 
 
-def angular_distance_to_angle(angle, target):
-    if not (is_num(angle) and is_num(target)):
-        return None
-    return abs(signed_shortest_angle_diff(angle, target))
+def lp_sector_score(bearing):
+    if not is_num(bearing):
+        return 0.0
+    if point_in_wrapped_sector(bearing, 330.0, 30.0):
+        dist = smallest_angle_to_north(bearing)
+        return clamp(100.0 - (dist / 30.0) * 20.0, 80.0, 100.0)
+    if point_in_wrapped_sector(bearing, 300.0, 60.0):
+        dist = max(0.0, smallest_angle_to_north(bearing) - 30.0)
+        return clamp(80.0 - (dist / 30.0) * 30.0, 50.0, 80.0)
+    if point_in_wrapped_sector(bearing, 240.0, 120.0):
+        south_dist = abs(abs(signed_shortest_angle_diff(bearing, 180.0)))
+        return clamp(35.0 - norm(south_dist, 0.0, 60.0) * 35.0, 0.0, 35.0)
+    return 20.0
+
+
+def lp_alignment_label(bearing):
+    if not is_num(bearing):
+        return "unknown"
+    if point_in_wrapped_sector(bearing, 330.0, 30.0):
+        return "core"
+    if point_in_wrapped_sector(bearing, 300.0, 60.0):
+        return "favored"
+    if point_in_wrapped_sector(bearing, 240.0, 120.0):
+        return "side"
+    return "south"
 
 
 def angular_distance_to_sector(angle, left_deg, right_deg):
@@ -230,114 +250,115 @@ def angular_distance_to_sector(angle, left_deg, right_deg):
         return None
     if point_in_wrapped_sector(angle, left_deg, right_deg):
         return 0.0
-    left_dist = angular_distance_to_angle(angle, left_deg)
-    right_dist = angular_distance_to_angle(angle, right_deg)
-    return min(left_dist, right_dist)
+    a = normalize_angle(angle)
+    left = normalize_angle(left_deg)
+    right = normalize_angle(right_deg)
+    return min(abs(signed_shortest_angle_diff(a, left)), abs(signed_shortest_angle_diff(a, right)))
 
 
 def lp_distance_to_favored_sector(bearing):
-    if not is_num(bearing):
-        return None
-    return angular_distance_to_sector(
-        bearing,
-        LP_FAVORED_SECTOR["good_left"],
-        LP_FAVORED_SECTOR["good_right"],
-    )
+    return angular_distance_to_sector(bearing, LP_FAVORED_SECTOR["good_left"], LP_FAVORED_SECTOR["good_right"])
 
 
-def lp_sector_score(bearing):
-    if not is_num(bearing):
+def lp_distance_score(lpd_deg):
+    if not is_num(lpd_deg):
         return 0.0
-
-    dist_to_center = angular_distance_to_angle(bearing, LP_FAVORED_SECTOR["center"])
-    dist_to_favored = lp_distance_to_favored_sector(bearing)
-
-    if point_in_wrapped_sector(bearing, LP_FAVORED_SECTOR["core_left"], LP_FAVORED_SECTOR["core_right"]):
-        return clamp(100.0 - norm(dist_to_center, 0.0, 30.0) * 8.0, 92.0, 100.0)
-    if point_in_wrapped_sector(bearing, LP_FAVORED_SECTOR["good_left"], LP_FAVORED_SECTOR["good_right"]):
-        return clamp(92.0 - norm(dist_to_center, 30.0, 60.0) * 22.0, 70.0, 92.0)
-
-    south_dist = angular_distance_to_angle(bearing, 180.0)
-    return clamp(55.0 - norm(dist_to_favored, 0.0, 120.0) * 55.0 - norm(south_dist, 0.0, 40.0) * 10.0, 0.0, 55.0)
+    return clamp(100.0 * (1.0 - norm(lpd_deg, 0.0, 30.0)), 0.0, 100.0)
 
 
-def lp_distance_score(distance_deg):
-    if not is_num(distance_deg):
-        return 0.0
-    return clamp(100.0 - norm(distance_deg, 0.0, 90.0) * 100.0, 0.0, 100.0)
-
-
-def lp_alignment_label(bearing):
+def compass4_from_bearing(bearing):
     if not is_num(bearing):
-        return "unknown"
-    if point_in_wrapped_sector(bearing, LP_FAVORED_SECTOR["core_left"], LP_FAVORED_SECTOR["core_right"]):
-        return "core"
-    if point_in_wrapped_sector(bearing, LP_FAVORED_SECTOR["good_left"], LP_FAVORED_SECTOR["good_right"]):
-        return "favored"
-    if point_in_wrapped_sector(bearing, 240.0, 120.0):
-        return "side"
-    return "south"
+        return "?"
+    a = normalize_angle(bearing)
+    if a >= 315 or a < 45:
+        return "N"
+    if a < 135:
+        return "E"
+    if a < 225:
+        return "S"
+    return "W"
+
+
+def lp_motion_cardinal(prev_lon, prev_lat, now_lon, now_lat):
+    move_bearing = bearing_deg(prev_lon, prev_lat, now_lon, now_lat)
+    return compass4_from_bearing(move_bearing), move_bearing
 
 
 def lp_trend_toward_favored_sector(now_bearing, prev_bearing):
     if not (is_num(now_bearing) and is_num(prev_bearing)):
-        return None, None, None, False
+        return {
+            "distance_now": None,
+            "distance_prev": None,
+            "center_distance_now": None,
+            "center_distance_prev": None,
+            "toward_deg": None,
+            "approaching": False,
+        }
 
     now_dist = lp_distance_to_favored_sector(now_bearing)
     prev_dist = lp_distance_to_favored_sector(prev_bearing)
-    toward_favored = prev_dist - now_dist
-    delta_bearing = signed_shortest_angle_diff(now_bearing, prev_bearing)
-    approaching = toward_favored > 2.5
-    return now_dist, toward_favored, delta_bearing, approaching
+    now_center = smallest_angle_to_north(now_bearing)
+    prev_center = smallest_angle_to_north(prev_bearing)
+
+    if now_dist == 0.0 and prev_dist == 0.0:
+        toward = prev_center - now_center
+    else:
+        toward = prev_dist - now_dist
+
+    return {
+        "distance_now": now_dist,
+        "distance_prev": prev_dist,
+        "center_distance_now": now_center,
+        "center_distance_prev": prev_center,
+        "toward_deg": toward,
+        "approaching": is_num(toward) and toward >= 2.0,
+    }
 
 
-def lp_approach_speed_degph(now_dist, prev_dist, hours=6.0):
-    if not (is_num(now_dist) and is_num(prev_dist)) or hours <= 0:
-        return None
-    return (prev_dist - now_dist) / hours
-
-
-def lp_trend_score(toward_favored_deg6h, approach_speed_degph):
-    score = 0.0
-    if is_num(toward_favored_deg6h):
-        score += 75.0 * norm(toward_favored_deg6h, -15.0, 15.0)
-    if is_num(approach_speed_degph):
-        score += 25.0 * norm(approach_speed_degph, -2.0, 2.0)
-    return clamp(score, 0.0, 100.0)
-
-
-def lp_geometry_score(position_score, distance_score, trend_score, approach_speed_degph):
-    approach_score = norm(approach_speed_degph, -2.0, 2.0) * 100.0 if is_num(approach_speed_degph) else 50.0
-    return clamp(
-        0.42 * position_score
-        + 0.30 * distance_score
-        + 0.20 * trend_score
-        + 0.08 * approach_score,
-        0.0,
-        100.0,
-    )
-
-
-def lpv_direction_label(delta_bearing, toward_favored_deg6h, now_bearing=None):
-    if is_num(toward_favored_deg6h) and toward_favored_deg6h >= 0.5:
-        return "N"
-    if is_num(delta_bearing):
-        if delta_bearing <= -2.0:
-            return "W"
-        if delta_bearing >= 2.0:
-            return "E"
-    if is_num(now_bearing) and point_in_wrapped_sector(now_bearing, 150.0, 210.0):
-        return "S"
-    return "W" if is_num(toward_favored_deg6h) and toward_favored_deg6h < 0 else "N"
-
-
-def format_lpv_label(toward_favored_deg6h, delta_bearing, now_bearing=None):
-    if not is_num(toward_favored_deg6h):
+def format_lpv_label(toward_deg, motion_cardinal):
+    if not is_num(toward_deg):
         return "LPV?"
-    sign = "+" if toward_favored_deg6h >= 0 else "-"
-    mag = int(round(abs(toward_favored_deg6h)))
-    direction = lpv_direction_label(delta_bearing, toward_favored_deg6h, now_bearing)
-    return f"LPV{sign}{mag}{direction}"
+    sign = "+" if toward_deg >= 0 else "-"
+    cardinal = motion_cardinal if motion_cardinal in {"N", "E", "S", "W"} else "?"
+    return f"LPV{sign}{int(round(abs(toward_deg)))}{cardinal}"
+
+
+def lp_gate_factor(lpd_deg, lpv_toward_deg):
+    if not is_num(lpd_deg):
+        return 0.35
+
+    dist_factor = 1.0 - norm(lpd_deg, 0.0, 30.0)
+
+    if is_num(lpv_toward_deg):
+        if lpv_toward_deg >= 6:
+            trend_factor = 1.00
+        elif lpv_toward_deg >= 2:
+            trend_factor = 0.80
+        elif lpv_toward_deg > -2:
+            trend_factor = 0.55
+        elif lpv_toward_deg > -6:
+            trend_factor = 0.30
+        else:
+            trend_factor = 0.15
+    else:
+        trend_factor = 0.45
+
+    return clamp(0.15 + 0.85 * dist_factor * trend_factor, 0.15, 1.0)
+
+
+def lp_geometry_score(bearing, lpd_deg, lpv_toward_deg, approach_speed_deg6h=None):
+    pos_score = lp_sector_score(bearing)
+    dist_score = lp_distance_score(lpd_deg)
+    if is_num(lpv_toward_deg):
+        trend_score = 100.0 * norm(lpv_toward_deg, -10.0, 10.0)
+    else:
+        trend_score = 50.0
+    if is_num(approach_speed_deg6h):
+        approach_score = 100.0 * norm(approach_speed_deg6h, -8.0, 8.0)
+    else:
+        approach_score = trend_score
+    geom = 0.42 * pos_score + 0.30 * dist_score + 0.18 * trend_score + 0.10 * approach_score
+    return clamp(geom, 0.0, 100.0)
 
 
 def write_summary_file(payload):
@@ -370,11 +391,14 @@ def write_summary_file(payload):
         "gradient": inputs.get("gradient"),
         "sf6": inputs.get("sf6"),
         "accG": derived.get("accG"),
+        "regionalZone": derived.get("seaCentroidSector") or derived.get("sector"),
         "lpBearing": derived.get("lpBearingFromSea"),
-        "lpv": derived.get("lpvLabel"),
-        "lpDistance": derived.get("lpDistanceToFavoredSector"),
+        "lpBearingTrend6h": derived.get("lpBearingTrend6h"),
+        "lpTrendLabel": derived.get("lpTrendLabel"),
+        "lpDistanceToFavoredSector": derived.get("lpDistanceToFavoredSector"),
         "lpDistanceScore": derived.get("lpDistanceScore"),
         "lpGeometryScore": derived.get("lpGeometryScore"),
+        "lpApproachSpeedDeg6h": derived.get("lpApproachSpeedDeg6h"),
         "lpSectorScore": derived.get("lpSectorScore"),
         "lpApproachingFavoredSector": derived.get("lpApproachingFavoredSector"),
     }
@@ -1220,16 +1244,16 @@ def build_payload(now_dt):
     lp_bearing_from_sea = bearing_deg(sea_ref_lon, sea_ref_lat, lp_lon, lp_lat)
     lp_sector_score_now = lp_sector_score(lp_bearing_from_sea)
     lp_alignment_now = lp_alignment_label(lp_bearing_from_sea)
-    lp_distance_to_favored_now = lp_distance_to_favored_sector(lp_bearing_from_sea)
-    lp_distance_score_now = lp_distance_score(lp_distance_to_favored_now)
+    lp_distance_to_favored_deg = lp_distance_to_favored_sector(lp_bearing_from_sea)
+    lp_distance_score_now = lp_distance_score(lp_distance_to_favored_deg)
 
     prev_lp_bearing = None
-    prev_lpd = None
     lp_bearing_dist_now = None
     lp_bearing_trend_6h = None
-    lp_bearing_delta_6h = None
     lp_approaching_favored = False
-    lp_approach_speed = None
+    lp_motion_cardinal_6h = "?"
+    lp_motion_bearing = None
+    lp_approach_speed_deg6h = None
     if snap_6:
         prev_lp_bearing = bearing_deg(
             snap_6.get("seaMinLon"),
@@ -1237,20 +1261,26 @@ def build_payload(now_dt):
             snap_6.get("seaCentroidLon"),
             snap_6.get("seaCentroidLat"),
         )
-        prev_lpd = lp_distance_to_favored_sector(prev_lp_bearing)
-        lp_bearing_dist_now, lp_bearing_trend_6h, lp_bearing_delta_6h, lp_approaching_favored = lp_trend_toward_favored_sector(
-            lp_bearing_from_sea, prev_lp_bearing
+        lp_trend = lp_trend_toward_favored_sector(lp_bearing_from_sea, prev_lp_bearing)
+        lp_bearing_dist_now = lp_trend["center_distance_now"]
+        lp_bearing_trend_6h = lp_trend["toward_deg"]
+        lp_approaching_favored = lp_trend["approaching"]
+        lp_approach_speed_deg6h = lp_bearing_trend_6h
+        lp_motion_cardinal_6h, lp_motion_bearing = lp_motion_cardinal(
+            snap_6.get("seaCentroidLon"),
+            snap_6.get("seaCentroidLat"),
+            lp_lon,
+            lp_lat,
         )
-        lp_approach_speed = lp_approach_speed_degph(lp_bearing_dist_now, prev_lpd, hours=6.0)
 
-    lpv_label = format_lpv_label(lp_bearing_trend_6h, lp_bearing_delta_6h, lp_bearing_from_sea)
-    lpd_tag = f"LPD{int(round(lp_distance_to_favored_now))}" if is_num(lp_distance_to_favored_now) else "LPD?"
-    lpg_score = lp_geometry_score(
-        lp_sector_score_now,
-        lp_distance_score_now,
-        lp_trend_score(lp_bearing_trend_6h, lp_approach_speed),
-        lp_approach_speed,
+    lp_trend_label = format_lpv_label(lp_bearing_trend_6h, lp_motion_cardinal_6h)
+    lp_geometry_score_now = lp_geometry_score(
+        lp_bearing_from_sea,
+        lp_distance_to_favored_deg,
+        lp_bearing_trend_6h,
+        lp_approach_speed_deg6h,
     )
+    lp_gate = lp_gate_factor(lp_distance_to_favored_deg, lp_bearing_trend_6h)
 
     lp_offset_hpa = (sea_pressure - lp_p) if is_num(sea_pressure) and is_num(lp_p) else None
     lp_distance_km = haversine_km(sea_ref_lon, sea_ref_lat, lp_lon, lp_lat)
@@ -1259,28 +1289,28 @@ def build_payload(now_dt):
         quality_flags.append("lp_core_alignment")
     elif lp_alignment_now == "favored":
         quality_flags.append("lp_favored_alignment")
-    if is_num(lp_distance_to_favored_now) and lp_distance_to_favored_now == 0:
-        quality_flags.append("lp_inside_favored_sector")
+    if is_num(lp_distance_to_favored_deg) and lp_distance_to_favored_deg <= 5:
+        quality_flags.append("lp_near_favored_sector")
     if lp_approaching_favored:
         quality_flags.append("lp_approaching_favored_sector")
 
+    lp_geom_component = (
+        0.70 * (lp_geometry_score_now / 100.0)
+        + 0.30 * (lp_sector_score_now / 100.0)
+    )
+
     coupling = 100 * (
-        0.26 * (cyclone_score / 100.0)
-        + 0.16 * (lpg_score / 100.0)
-        + 0.06 * (lp_distance_score_now / 100.0)
+        0.29 * (cyclone_score / 100.0)
+        + 0.10 * lp_geom_component * lp_gate
         + 0.08 * (sector_score / 100.0)
         + 0.16 * norm(sea_low_depth, 5, 30)
         + 0.10 * norm(ice_wind, 4, 20)
-        + 0.12 * norm(vent_now, 4, 16)
-        + 0.06 * norm(coast_gate_now, 8, 30)
+        + 0.15 * norm(vent_now, 4, 16)
+        + 0.10 * norm(coast_gate_now, 8, 30)
     )
-    if lp_alignment_now == "core":
-        coupling += 4.0
-    elif lp_alignment_now == "favored":
+    if lp_alignment_now == "core" and lp_gate >= 0.85:
         coupling += 2.0
-    if lp_approaching_favored:
-        coupling += 2.0
-    if is_num(lp_approach_speed) and lp_approach_speed >= 1.0:
+    elif lp_alignment_now == "favored" and lp_gate >= 0.70:
         coupling += 1.0
     coupling = clamp(coupling, 0, 100)
 
@@ -1315,8 +1345,8 @@ def build_payload(now_dt):
         + 0.04 * norm(coast_gate_now, 8, 30)
         + 0.03 * norm(coast_gate_d6, 0, 8)
     )
-    if lp_approaching_favored:
-        trigger += 1.5
+    if lp_approaching_favored and is_num(lp_distance_to_favored_deg) and lp_distance_to_favored_deg <= 8:
+        trigger += 0.8
     trigger = clamp(trigger, 0, 100)
 
     potential_raw = clamp(
@@ -1339,9 +1369,12 @@ def build_payload(now_dt):
             or (is_num(ice_wind_trend_6h) and ice_wind_trend_6h >= 2)
             or (is_num(vent_now) and vent_now >= 8)
             or (is_num(coast_gate_now) and coast_gate_now >= 16)
-            or lp_approaching_favored
-            or (is_num(lp_approach_speed) and lp_approach_speed >= 1.0)
-            or (is_num(lp_distance_to_favored_now) and lp_distance_to_favored_now <= 12.0)
+            or (
+                lp_approaching_favored
+                and is_num(lp_distance_to_favored_deg)
+                and lp_distance_to_favored_deg <= 8
+                and coupling >= 55
+            )
         )
     )
 
@@ -1385,14 +1418,13 @@ def build_payload(now_dt):
     vg_tag = compact_gate_tag("VG", vent_now)
     cg_tag = compact_gate_tag("CG", coast_gate_now)
     lpb_tag = compact_score_tag("LPB", lp_bearing_from_sea)
-    lpv_tag = lpv_label
-    lps_tag = compact_score_tag("LPS", lp_sector_score_now)
-    lpg_tag = compact_score_tag("LPG", lpg_score)
-    warn_tag = " FARE" if level in {"ORG", "RED"} or watch else " OBS"
+    lpv_tag = lp_trend_label
+    lpd_tag = compact_score_tag("LPD", lp_distance_to_favored_deg)
+    lpg_tag = compact_score_tag("LPG", lp_geometry_score_now)
     lad_tag = " LAD" if ladning_active else ""
 
     message = (
-        f"{level}{int(round(risk))} {horizon}{trend_tag}{lad_tag}{warn_tag} "
+        f"{level}{int(round(risk))} {horizon}{trend_tag}{lad_tag} "
         f"RES{int(round(reservoir))} TRG{int(round(trigger))} CPL{int(round(coupling))} "
         f"ICE{ice_pressure:.0f} SEA{sea_pressure:.0f} "
         f"GR{gradient:.1f} {ag_tag} "
@@ -1489,16 +1521,18 @@ def build_payload(now_dt):
             "potentialReservoirFactor": round(potential_reservoir_factor, 2),
             "lpBearingFromSea": round(lp_bearing_from_sea, 1) if is_num(lp_bearing_from_sea) else None,
             "lpPreviousBearingFromSea": round(prev_lp_bearing, 1) if is_num(prev_lp_bearing) else None,
-            "lpBearingDistanceToNorth": round(smallest_angle_to_north(lp_bearing_from_sea), 1) if is_num(lp_bearing_from_sea) else None,
+            "lpBearingDistanceToNorth": round(lp_bearing_dist_now, 1) if is_num(lp_bearing_dist_now) else None,
             "lpBearingTrend6h": round(lp_bearing_trend_6h, 1) if is_num(lp_bearing_trend_6h) else None,
-            "lpBearingDelta6h": round(lp_bearing_delta_6h, 1) if is_num(lp_bearing_delta_6h) else None,
-            "lpvLabel": lpv_label,
+            "lpTrendLabel": lp_trend_label,
+            "lpMotionBearing6h": round(lp_motion_bearing, 1) if is_num(lp_motion_bearing) else None,
+            "lpMotionCardinal6h": lp_motion_cardinal_6h,
+            "lpApproachSpeedDeg6h": round(lp_approach_speed_deg6h, 1) if is_num(lp_approach_speed_deg6h) else None,
             "lpApproachingFavoredSector": lp_approaching_favored,
-            "lpDistanceToFavoredSector": round(lp_distance_to_favored_now, 1) if is_num(lp_distance_to_favored_now) else None,
+            "lpDistanceToFavoredSector": round(lp_distance_to_favored_deg, 1) if is_num(lp_distance_to_favored_deg) else None,
             "lpDistanceScore": int(round(lp_distance_score_now)),
-            "lpApproachSpeedDegPerHour": round(lp_approach_speed, 2) if is_num(lp_approach_speed) else None,
             "lpSectorScore": int(round(lp_sector_score_now)),
-            "lpGeometryScore": int(round(lpg_score)),
+            "lpGeometryScore": int(round(lp_geometry_score_now)),
+            "lpGeometryGate": round(lp_gate, 2),
             "lpAlignmentLabel": lp_alignment_now,
             "lpOffsetHpa": round(lp_offset_hpa, 1) if is_num(lp_offset_hpa) else None,
             "lpDistanceKm": round(lp_distance_km, 1) if is_num(lp_distance_km) else None,
@@ -1656,14 +1690,16 @@ def write_stale_payload(error):
             "lpPreviousBearingFromSea": None,
             "lpBearingDistanceToNorth": None,
             "lpBearingTrend6h": None,
-            "lpBearingDelta6h": None,
-            "lpvLabel": None,
+            "lpTrendLabel": None,
+            "lpMotionBearing6h": None,
+            "lpMotionCardinal6h": None,
+            "lpApproachSpeedDeg6h": None,
             "lpApproachingFavoredSector": False,
             "lpDistanceToFavoredSector": None,
             "lpDistanceScore": None,
-            "lpApproachSpeedDegPerHour": None,
             "lpSectorScore": None,
             "lpGeometryScore": None,
+            "lpGeometryGate": None,
             "lpAlignmentLabel": None,
             "lpOffsetHpa": None,
             "lpDistanceKm": None,
