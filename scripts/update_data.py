@@ -324,38 +324,26 @@ def format_lpv_label(toward_deg, motion_cardinal):
 
 
 def lp_gate_factor(lpd_deg, lpv_toward_deg):
-    """
-    Conservative 0..1 gate for how much LP geometry should influence the model.
-
-    Design:
-    - close to favored sector is necessary but not sufficient
-    - inward trend is required for strong effect
-    - outward trend sharply reduces effect even if LP is already near the sector
-    """
     if not is_num(lpd_deg):
-        return 0.25
+        return 0.35
 
-    # Strong benefit only when very close to the favored sector.
-    dist_factor = 1.0 - norm(lpd_deg, 0.0, 24.0)
+    dist_factor = 1.0 - norm(lpd_deg, 0.0, 30.0)
 
     if is_num(lpv_toward_deg):
-        if lpv_toward_deg >= 8:
-            trend_factor = 0.95
-        elif lpv_toward_deg >= 4:
-            trend_factor = 0.78
+        if lpv_toward_deg >= 6:
+            trend_factor = 1.00
         elif lpv_toward_deg >= 2:
-            trend_factor = 0.62
+            trend_factor = 0.80
         elif lpv_toward_deg > -2:
-            trend_factor = 0.42
-        elif lpv_toward_deg > -5:
-            trend_factor = 0.20
+            trend_factor = 0.55
+        elif lpv_toward_deg > -6:
+            trend_factor = 0.30
         else:
-            trend_factor = 0.08
+            trend_factor = 0.15
     else:
-        trend_factor = 0.35
+        trend_factor = 0.45
 
-    gate = 0.10 + 0.75 * dist_factor * trend_factor
-    return clamp(gate, 0.10, 0.85)
+    return clamp(0.15 + 0.85 * dist_factor * trend_factor, 0.15, 1.0)
 
 
 def lp_geometry_score(bearing, lpd_deg, lpv_toward_deg, approach_speed_deg6h=None):
@@ -369,10 +357,7 @@ def lp_geometry_score(bearing, lpd_deg, lpv_toward_deg, approach_speed_deg6h=Non
         approach_score = 100.0 * norm(approach_speed_deg6h, -8.0, 8.0)
     else:
         approach_score = trend_score
-
-    # Slightly more position/distance driven, slightly less trend-driven
-    # than the previous LP version to avoid overreacting in marginal GRN cases.
-    geom = 0.46 * pos_score + 0.32 * dist_score + 0.14 * trend_score + 0.08 * approach_score
+    geom = 0.42 * pos_score + 0.30 * dist_score + 0.18 * trend_score + 0.10 * approach_score
     return clamp(geom, 0.0, 100.0)
 
 
@@ -1310,23 +1295,23 @@ def build_payload(now_dt):
         quality_flags.append("lp_approaching_favored_sector")
 
     lp_geom_component = (
-        0.65 * (lp_geometry_score_now / 100.0)
-        + 0.35 * (lp_sector_score_now / 100.0)
+        0.70 * (lp_geometry_score_now / 100.0)
+        + 0.30 * (lp_sector_score_now / 100.0)
     )
 
     coupling = 100 * (
         0.29 * (cyclone_score / 100.0)
-        + 0.08 * lp_geom_component * lp_gate
+        + 0.10 * lp_geom_component * lp_gate
         + 0.08 * (sector_score / 100.0)
         + 0.16 * norm(sea_low_depth, 5, 30)
         + 0.10 * norm(ice_wind, 4, 20)
         + 0.15 * norm(vent_now, 4, 16)
         + 0.10 * norm(coast_gate_now, 8, 30)
     )
-    if lp_alignment_now == "core" and lp_gate >= 0.80 and is_num(lp_bearing_trend_6h) and lp_bearing_trend_6h >= 3:
-        coupling += 1.5
-    elif lp_alignment_now == "favored" and lp_gate >= 0.65 and is_num(lp_bearing_trend_6h) and lp_bearing_trend_6h >= 3:
-        coupling += 0.5
+    if lp_alignment_now == "core" and lp_gate >= 0.85:
+        coupling += 2.0
+    elif lp_alignment_now == "favored" and lp_gate >= 0.70:
+        coupling += 1.0
     coupling = clamp(coupling, 0, 100)
 
     thermal_component = 100 * (
@@ -1360,14 +1345,8 @@ def build_payload(now_dt):
         + 0.04 * norm(coast_gate_now, 8, 30)
         + 0.03 * norm(coast_gate_d6, 0, 8)
     )
-    if (
-        lp_approaching_favored
-        and is_num(lp_distance_to_favored_deg)
-        and lp_distance_to_favored_deg <= 5
-        and is_num(lp_bearing_trend_6h)
-        and lp_bearing_trend_6h >= 3
-    ):
-        trigger += 0.5
+    if lp_approaching_favored and is_num(lp_distance_to_favored_deg) and lp_distance_to_favored_deg <= 8:
+        trigger += 0.8
     trigger = clamp(trigger, 0, 100)
 
     potential_raw = clamp(
@@ -1393,10 +1372,8 @@ def build_payload(now_dt):
             or (
                 lp_approaching_favored
                 and is_num(lp_distance_to_favored_deg)
-                and lp_distance_to_favored_deg <= 6
-                and is_num(lp_bearing_trend_6h)
-                and lp_bearing_trend_6h >= 3
-                and coupling >= 58
+                and lp_distance_to_favored_deg <= 8
+                and coupling >= 55
             )
         )
     )
@@ -1766,3 +1743,4 @@ if __name__ == "__main__":
     except Exception as e:
         print("Update failed:", repr(e))
         write_stale_payload(e)
+
