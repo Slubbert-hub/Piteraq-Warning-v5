@@ -1328,5 +1328,24 @@
     "coldSupportNow": 43.4,
     "dTCoastIceNow": 39.1,
     "sector": "C2"
+  },
+  {
+    "t": "2026-03-22T12:00:00Z",
+    "icePressure": 1007.9,
+    "iceTempC": -43.6,
+    "seaPressure": 986.6,
+    "gradient": 21.2,
+    "iceWind": 6.3,
+    "ventilIndex": 3.3,
+    "coastGate": 15.3,
+    "seaMinLon": -31.1,
+    "seaMinLat": 65.4,
+    "seaCentroidPressure": 989.3,
+    "seaCentroidLon": -30.76,
+    "seaCentroidLat": 64.951,
+    "icePressureAnomNow": -5.4,
+    "coldSupportNow": 43.6,
+    "dTCoastIceNow": 39.8,
+    "sector": "C2"
   }
 ]
