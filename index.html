@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="no">
 <head>
+  <link rel="manifest" href="manifest.json">
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Piteraq Monitor</title>
@@ -787,5 +788,13 @@
         `Kunne ikke laste summary.json/data.json\n${err.message}`;
     });
   </script>
+  <script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('/Piteraq-Warning-v5/sw.js')
+        .catch(err => console.warn('SW feil:', err));
+    });
+  }
+</script>
 </body>
 </html>
