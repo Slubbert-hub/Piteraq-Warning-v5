@@ -1184,7 +1184,10 @@ def katabatic_loading_metrics(history, now_dt, current_snapshot, dT_coast_ice_no
     loading = (
         is_num(cold_now) and cold_now >= 32.0
         and is_num(dT_coast_ice_now) and dT_coast_ice_now >= 30.0
-        and cold_hits >= 1 or cold_now >= 36.0
+        and (
+            cold_hits >= 1 
+            or cold_now >= 36.0
+        )
     )
     primed = (
         is_num(cold_now) and cold_now >= 36.0
