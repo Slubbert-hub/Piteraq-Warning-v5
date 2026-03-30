@@ -1721,8 +1721,8 @@ def build_payload(now_dt):
     lad_tag = " LAD" if ladning_active else ""
 
     message = (
-        f"PIT {level}{int(round(risk))} "
-        f"LOAD {loading_level} "
+        f"{level}{int(round(risk))} "
+        f"LOAD{loading_level} PIT{level} "
         f"H{horizon.strip()} "
         f"RES{int(round(reservoir))} TRG{int(round(trigger))} CPL{int(round(coupling))} "
         f"GR{gradient:.1f} "
