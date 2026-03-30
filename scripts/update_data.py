@@ -1201,11 +1201,11 @@ def katabatic_loading_metrics(history, now_dt, current_snapshot, dT_coast_ice_no
 
     if is_num(cold_now):
         if cold_now >= 40.0:
-            score += 14.0
+            score += 12.0
         elif cold_now >= 38.0:
             score += 10.0
         elif cold_now >= 36.0:
-            score += 6.0
+            score += 8.0
         elif cold_now >= 34.0:
             score += 4.0
 
