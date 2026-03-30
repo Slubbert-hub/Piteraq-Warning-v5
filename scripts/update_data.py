@@ -401,6 +401,10 @@ def write_summary_file(payload):
         "lpApproachSpeedDeg6h": derived.get("lpApproachSpeedDeg6h"),
         "lpSectorScore": derived.get("lpSectorScore"),
         "lpApproachingFavoredSector": derived.get("lpApproachingFavoredSector"),
+        "sustainedPiteraqScore": derived.get("sustainedPiteraqScore"),
+        "sustainedPiteraqStage": derived.get("sustainedPiteraqStage"),
+        "sustainedPiteraqNearHits": derived.get("sustainedPiteraqNearHits"),
+        "sustainedPiteraqStrongHits": derived.get("sustainedPiteraqStrongHits"),
     }
 
     save_json(SUMMARY_FILE, summary)
@@ -998,7 +1002,7 @@ def backfill_until_targets_found(history, older_instance_ids, missing_labels):
 
 def classify_risk(score):
     if score >= 75:
-        return "RED", "PITERAQ RELEASE", "0-6T"
+        return "RED", "PITERAQ WARNING", "0-6T"
     if score >= 55:
         return "ORG", "PITERAQ LIKELY", "6-12T"
     if score >= 35:
@@ -1018,6 +1022,113 @@ def potential_index(reservoir, coupling, gradient, d6, ice_wind_trend_6h):
         + 0.10 * norm(d6 if is_num(d6) else 0.0, 0, 8)
         + 0.10 * norm(ice_wind_trend_6h if is_num(ice_wind_trend_6h) else 0.0, 0, 6)
     )
+
+def sustained_piteraq_hit(row, strong=False):
+    if not isinstance(row, dict):
+        return False
+    gradient = row.get("gradient")
+    coast_gate = row.get("coastGate")
+    ventil = row.get("ventilIndex")
+    cold = row.get("coldSupportNow")
+    if strong:
+        return (
+            is_num(gradient) and gradient >= 24.0
+            and is_num(coast_gate) and coast_gate >= 18.0
+            and is_num(ventil) and ventil >= 4.0
+            and is_num(cold) and cold >= 36.0
+        )
+    return (
+        is_num(gradient) and gradient >= 18.0
+        and is_num(coast_gate) and coast_gate >= 16.0
+        and is_num(ventil) and ventil >= 3.0
+        and is_num(cold) and cold >= 32.0
+    )
+
+
+def recent_piteraq_rows(history, now_dt, hours=12):
+    rows = []
+    for item in history:
+        if not isinstance(item, dict) or "t" not in item:
+            continue
+        try:
+            dt = parse_iso(item["t"])
+        except Exception:
+            continue
+        if dt <= now_dt and dt >= now_dt - timedelta(hours=hours):
+            rows.append(item)
+    rows.sort(key=lambda x: x["t"])
+    return rows[-5:]
+
+
+def sustained_piteraq_metrics(history, now_dt, current_snapshot):
+    recent_rows = recent_piteraq_rows(history, now_dt, hours=12)
+    near_hits = sum(1 for row in recent_rows if sustained_piteraq_hit(row, strong=False))
+    strong_hits = sum(1 for row in recent_rows if sustained_piteraq_hit(row, strong=True))
+
+    gradient_now = current_snapshot.get("gradient")
+    coast_gate_now = current_snapshot.get("coastGate")
+    ventil_now = current_snapshot.get("ventilIndex")
+    cold_now = current_snapshot.get("coldSupportNow")
+
+    cold_score = 100.0 * norm(cold_now, 32.0, 44.0)
+    gradient_score = 100.0 * norm(gradient_now, 18.0, 30.0)
+    coast_gate_score = 100.0 * norm(coast_gate_now, 16.0, 26.0)
+    ventil_score = 100.0 * norm(ventil_now, 3.0, 8.0)
+
+    current_near = sustained_piteraq_hit(current_snapshot, strong=False)
+    current_strong = sustained_piteraq_hit(current_snapshot, strong=True)
+
+    if current_strong and strong_hits >= 2:
+        persistence_score = 100.0
+    elif current_strong and near_hits >= 2:
+        persistence_score = 92.0
+    elif current_near and near_hits >= 2:
+        persistence_score = 78.0
+    elif current_near:
+        persistence_score = 58.0
+    else:
+        persistence_score = 25.0 * near_hits
+
+    score = (
+        0.22 * cold_score
+        + 0.22 * gradient_score
+        + 0.22 * coast_gate_score
+        + 0.14 * ventil_score
+        + 0.20 * persistence_score
+    )
+    score = clamp(score, 0.0, 100.0)
+
+    sustained_watch = current_near and near_hits >= 2
+    sustained_likely = current_strong and near_hits >= 2
+    sustained_warning = current_strong and (
+        strong_hits >= 2
+        or (
+            is_num(gradient_now) and gradient_now >= 26.0
+            and is_num(coast_gate_now) and coast_gate_now >= 22.0
+            and is_num(cold_now) and cold_now >= 38.0
+        )
+    )
+
+    stage = "none"
+    if sustained_warning:
+        stage = "warning"
+    elif sustained_likely:
+        stage = "likely"
+    elif sustained_watch:
+        stage = "watch"
+
+    return {
+        "score": score,
+        "near_hits": near_hits,
+        "strong_hits": strong_hits,
+        "recent_rows": recent_rows,
+        "current_near": current_near,
+        "current_strong": current_strong,
+        "watch": sustained_watch,
+        "likely": sustained_likely,
+        "warning": sustained_warning,
+        "stage": stage,
+    }
 
 
 def build_payload(now_dt):
@@ -1357,6 +1468,12 @@ def build_payload(now_dt):
     potential_reservoir_factor = 0.35 + 0.65 * (reservoir / 100.0)
     potential = clamp(potential_raw * potential_reservoir_factor, 0, 100)
 
+    sustained = sustained_piteraq_metrics(history, dt_now, current_snapshot)
+    sustained_score = sustained["score"]
+    sustained_stage = sustained["stage"]
+    sustained_near_hits = sustained["near_hits"]
+    sustained_strong_hits = sustained["strong_hits"]
+
     watch = (
         (reservoir >= 30 or potential >= 45)
         and coupling >= 60
@@ -1376,10 +1493,17 @@ def build_payload(now_dt):
                 and coupling >= 55
             )
         )
-    )
+    ) or sustained["watch"]
 
     base = 0.60 * trigger + 0.32 * reservoir + 0.08 * potential
     risk = base * (0.56 + 0.44 * (coupling / 100.0))
+
+    if sustained["watch"]:
+        risk = max(risk, 52.0)
+    if sustained["likely"]:
+        risk = max(risk, 68.0)
+    if sustained["warning"]:
+        risk = max(risk, 82.0)
 
     piteraq_mismatch = (
         is_num(reservoir) and reservoir < 15
@@ -1399,6 +1523,14 @@ def build_payload(now_dt):
 
     level, phase, horizon = classify_risk(risk)
 
+    if sustained["warning"]:
+        phase = "PITERAQ WARNING"
+        horizon = "0-6T"
+    elif sustained["likely"] and level in {"YEL", "ORG"}:
+        phase = "PITERAQ SUSTAINED"
+    elif sustained["watch"] and level == "YEL":
+        phase = "PITERAQ WATCH"
+
     if piteraq_mismatch and phase == "PITERAQ BUILDING":
         phase = "SYNOPTIC BUILDING"
     elif piteraq_mismatch and phase == "PITERAQ LIKELY":
@@ -1409,6 +1541,13 @@ def build_payload(now_dt):
         phase = "LADNING"
     elif watch and level == "GRN":
         phase = "WATCH"
+
+    if sustained["watch"]:
+        quality_flags.append("sustained_piteraq_watch")
+    if sustained["likely"]:
+        quality_flags.append("sustained_piteraq_likely")
+    if sustained["warning"]:
+        quality_flags.append("sustained_piteraq_warning")
 
     trend_tag = "" if trend_status == "ok" else " T?"
     ag_tag = compact_score_tag("AG", acc_g, uncertain=acc_uncertain)
@@ -1421,6 +1560,7 @@ def build_payload(now_dt):
     lpv_tag = lp_trend_label
     lpd_tag = compact_score_tag("LPD", lp_distance_to_favored_deg)
     lpg_tag = compact_score_tag("LPG", lp_geometry_score_now)
+    spt_tag = compact_score_tag("SPT", sustained_score)
     lad_tag = " LAD" if ladning_active else ""
 
     message = (
@@ -1429,7 +1569,7 @@ def build_payload(now_dt):
         f"ICE{ice_pressure:.0f} SEA{sea_pressure:.0f} "
         f"GR{gradient:.1f} {ag_tag} "
         f"SF6{fmt_msg_num(sf6)} "
-        f"{lpb_tag} {lpv_tag} {lpd_tag} {lpg_tag} "
+        f"{lpb_tag} {lpv_tag} {lpd_tag} {lpg_tag} {spt_tag} "
         f"{vg_tag} {cg_tag} {ct24_tag}"
     )
 
@@ -1534,6 +1674,10 @@ def build_payload(now_dt):
             "lpGeometryScore": int(round(lp_geometry_score_now)),
             "lpGeometryGate": round(lp_gate, 2),
             "lpAlignmentLabel": lp_alignment_now,
+            "sustainedPiteraqScore": int(round(sustained_score)),
+            "sustainedPiteraqStage": sustained_stage,
+            "sustainedPiteraqNearHits": sustained_near_hits,
+            "sustainedPiteraqStrongHits": sustained_strong_hits,
             "lpOffsetHpa": round(lp_offset_hpa, 1) if is_num(lp_offset_hpa) else None,
             "lpDistanceKm": round(lp_distance_km, 1) if is_num(lp_distance_km) else None,
             "accUncertain": acc_uncertain,
@@ -1701,6 +1845,10 @@ def write_stale_payload(error):
             "lpGeometryScore": None,
             "lpGeometryGate": None,
             "lpAlignmentLabel": None,
+            "sustainedPiteraqScore": None,
+            "sustainedPiteraqStage": None,
+            "sustainedPiteraqNearHits": None,
+            "sustainedPiteraqStrongHits": None,
             "lpOffsetHpa": None,
             "lpDistanceKm": None,
             "accUncertain": False,
