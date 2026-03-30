@@ -1744,7 +1744,7 @@ def build_payload(now_dt):
 
     message = (
         f"PIT {level}{int(round(risk))} "
-        f"LOAD {loading_level} "
+        f"LOAD {loading_level}/{loading_color} "
         f"{horizon}{trend_tag} "
         f"RES{int(round(reservoir))} TRG{int(round(trigger))} CPL{int(round(coupling))} "
         f"ICE{ice_pressure:.0f} SEA{sea_pressure:.0f} "
