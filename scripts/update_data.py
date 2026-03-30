@@ -1169,10 +1169,12 @@ def katabatic_loading_metrics(history, now_dt, current_snapshot, dT_coast_ice_no
         + 0.06 * ventil_support_score
     )
     if is_num(ice_pressure_anom_now):
-        score += 0.04 * pressure_now_score
-        if is_num(cold_now) and cold_now >= 38.0:
+    score += 0.04 * pressure_now_score
+
+if is_num(cold_now) and cold_now >= 38.0:
     score += 10.0
-    score = clamp(score, 0.0, 100.0)
+
+score = clamp(score, 0.0, 100.0)
 
     loading = (
         is_num(cold_now) and cold_now >= 32.0
