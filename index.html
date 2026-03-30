@@ -424,6 +424,7 @@
       const lpv = resolve(data, ['lpTrendLabel'], ['derived', 'lpTrendLabel']);
       const lpd = resolve(data, ['lpDistanceToFavoredSector'], ['derived', 'lpDistanceToFavoredSector']);
       const lpg = resolve(data, ['lpGeometryScore'], ['derived', 'lpGeometryScore']);
+      const spt = resolve(data, ['sustainedPiteraqScore'], ['derived', 'sustainedPiteraqScore']);
 
       const parts = [
         `${level}${fmt0(risk)}`,
@@ -434,7 +435,7 @@
         `ICE${fmt0(icePressure)}`,
         `SEA${fmt0(seaPressure)}`,
         `GR${isNum(gradient) ? Number(gradient).toFixed(1) : '–'}`,
-        `SF${isNum(sf6) ? Number(sf6).toFixed(1) : '–'}`,
+        `SF6${isNum(sf6) ? Number(sf6).toFixed(1) : '–'}`,
         `AG${fmt0(accG)}`,
         `LPB${fmt0(lpb)}`
       ];
@@ -449,6 +450,10 @@
 
       if (isNum(lpg)) {
         parts.push(`LPG${fmt0(lpg)}`);
+      }
+
+      if (isNum(spt)) {
+        parts.push(`SPT${fmt0(spt)}`);
       }
 
       return parts.join(' ');
@@ -468,6 +473,7 @@
       const phase = output.phase || data.phase || '–';
       const risk = scores.risk ?? data.risk;
       const watch = derived.watch ?? data.watch;
+      const sustainedStage = derived.sustainedPiteraqStage || data.sustainedPiteraqStage || null;
 
       document.getElementById('hero-location').textContent = location;
       document.getElementById('hero-updated').textContent = `Oppdatert ${updatedAt}`;
@@ -480,7 +486,9 @@
       chip.className = `chip ${chipClass(level)}`;
 
       document.getElementById('risk-phase').textContent = phase || '–';
-      document.getElementById('risk-watch').textContent = `Watch ${watch ? 'ON' : 'OFF'}`;
+      document.getElementById('risk-watch').textContent = sustainedStage && sustainedStage !== 'none'
+        ? `Watch ${watch ? 'ON' : 'OFF'} · sustained ${sustainedStage.toUpperCase()}`
+        : `Watch ${watch ? 'ON' : 'OFF'}`;
 
       const trendText = derived.trendDataStatus || data.trendDataStatus || '–';
       const trendEl = document.getElementById('trend-status');
@@ -540,6 +548,12 @@
           label: 'Risiko',
           value: `${fmt0(scores.risk)}/100`,
           desc: `${meta.location || 'Tasiilaq'} · ${meta.model || 'modell'}`
+        }),
+        metricCard({
+          label: 'Sustained piteraq',
+          value: `${fmt0(derived.sustainedPiteraqScore)}/100`,
+          desc: derived.sustainedPiteraqStage ? `fase ${derived.sustainedPiteraqStage}` : 'ingen vedvarende trigger',
+          tiny: `nær-treff ${fmt0(derived.sustainedPiteraqNearHits)} · sterke treff ${fmt0(derived.sustainedPiteraqStrongHits)}`
         }),
         metricCard({
           label: 'Regional sone',
