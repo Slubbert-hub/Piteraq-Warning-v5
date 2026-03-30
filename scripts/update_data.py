@@ -1676,7 +1676,7 @@ def build_payload(now_dt):
         f"RES{int(round(reservoir))} TRG{int(round(trigger))} CPL{int(round(coupling))} "
         f"ICE{ice_pressure:.0f} SEA{sea_pressure:.0f} "
         f"GR{gradient:.1f} {ag_tag} "
-        f"SF6{fmt_msg_num(sf6)} "
+        f"SF6{fmt_msg_num(sf6, signed=True)} "
         f"{lpb_tag} {lpv_tag} {lpd_tag} {lpg_tag} {spt_tag} "
         f"{vg_tag} {cg_tag} {ct24_tag}"
     )
