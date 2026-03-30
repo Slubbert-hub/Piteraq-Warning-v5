@@ -1041,28 +1041,6 @@ def classify_loading_color(score):
         return "YEL"
     else:
         return "GRN"
-    if not is_num(score):
-        return "LOW"
-    if score >= 75:
-        return "CRITICAL"
-    if score >= 55:
-        return "LOADED"
-    if score >= 35:
-        return "BUILDING"
-    return "LOW"
-
-
-def classify_loading_color(score):
-    if not is_num(score):
-        return "GRN"
-    if score >= 75:
-        return "RED"
-    if score >= 55:
-        return "ORG"
-    if score >= 35:
-        return "YEL"
-    return "GRN"
-
 
 def gradient_boost(gradient_hpa):
     return norm(gradient_hpa, 20, 40)
