@@ -1007,7 +1007,8 @@ def backfill_until_targets_found(history, older_instance_ids, missing_labels):
     return history, fetch_errors
 
 
-def classify_risk(score):def classify_loading_level(score):
+def classify_risk(score):
+    def classify_loading_level(score):
     if not is_num(score):
         return "LOW"
     if score >= 75:
