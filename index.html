@@ -401,7 +401,6 @@
     }
 
 function buildCompactMessage(data) {
-  // 🔥 hent message uansett struktur
   const message =
     (data.output && data.output.message) ||
     data.message;
@@ -410,86 +409,11 @@ function buildCompactMessage(data) {
     return message.trim();
   }
 
-  // fallback (gammel)
-  const scores = data.scores || {};
-  const inputs = data.inputs || {};
-  const derived = data.derived || {};
-
-  const level = data.level || 'GRN';
-  const risk = scores.risk;
+  const level = data.level || (data.output && data.output.level) || 'GRN';
+  const risk = (data.scores && data.scores.risk) ?? data.risk ?? 0;
 
   return `${level}${fmt0(risk)} (fallback)`;
 }
-  const output = data.output || {};
-
-  // 🔥 NY – støtter både summary og data
-  const message =
-    output.message ||
-    data.message ||
-    (data.output && data.output.message);
-
-  if (typeof message === 'string' && message.trim()) {
-    return message.trim();
-  }
-      const scores = data.scores || {};
-      const inputs = data.inputs || {};
-      const derived = data.derived || {};
-      const output = data.output || {};
-
-      if (typeof output.message === 'string' && output.message.trim()) {
-        return output.message.trim();
-      }
-
-      const level = resolve(data, ['level'], ['output', 'level']) || 'GRN';
-      const risk = resolve(data, ['risk'], ['scores', 'risk']);
-      const reservoir = resolve(data, ['reservoir'], ['scores', 'reservoir']);
-      const trigger = resolve(data, ['trigger'], ['scores', 'trigger']);
-      const coupling = resolve(data, ['coupling'], ['scores', 'coupling']);
-      const icePressure = resolve(data, ['icePressure'], ['inputs', 'icePressure']);
-      const seaPressure = resolve(data, ['seaPressure'], ['inputs', 'seaPressure']);
-      const gradient = resolve(data, ['gradient'], ['inputs', 'gradient']);
-      const sf6 = resolve(data, ['sf6'], ['inputs', 'sf6']);
-      const accG = resolve(data, ['accG'], ['derived', 'accG']);
-
-      const lpb = resolve(data, ['lpBearing'], ['lpBearingFromSea'], ['derived', 'lpBearingFromSea']);
-      const lpv = resolve(data, ['lpTrendLabel'], ['derived', 'lpTrendLabel']);
-      const lpd = resolve(data, ['lpDistanceToFavoredSector'], ['derived', 'lpDistanceToFavoredSector']);
-      const lpg = resolve(data, ['lpGeometryScore'], ['derived', 'lpGeometryScore']);
-      const spt = resolve(data, ['sustainedPiteraqScore'], ['derived', 'sustainedPiteraqScore']);
-
-      const parts = [
-        `${level}${fmt0(risk)}`,
-        `12-24T`,
-        `RES${fmt0(reservoir)}`,
-        `TRG${fmt0(trigger)}`,
-        `CPL${fmt0(coupling)}`,
-        `ICE${fmt0(icePressure)}`,
-        `SEA${fmt0(seaPressure)}`,
-        `GR${isNum(gradient) ? Number(gradient).toFixed(1) : '–'}`,
-        `SF6${isNum(sf6) ? Number(sf6).toFixed(1) : '–'}`,
-        `AG${fmt0(accG)}`,
-        `LPB${fmt0(lpb)}`
-      ];
-
-      if (typeof lpv === 'string' && lpv.trim()) {
-        parts.push(lpv.trim());
-      }
-
-      if (isNum(lpd)) {
-        parts.push(`LPD${fmt0(lpd)}`);
-      }
-
-      if (isNum(lpg)) {
-        parts.push(`LPG${fmt0(lpg)}`);
-      }
-
-      if (isNum(spt)) {
-        parts.push(`SPT${fmt0(spt)}`);
-      }
-
-      return parts.join(' ');
-    }
-
     function setHeader(data) {
       const meta = data.meta || {};
       const scores = data.scores || {};
