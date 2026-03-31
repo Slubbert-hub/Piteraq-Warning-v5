@@ -46,24 +46,33 @@ self.addEventListener('activate', event => {
 self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
 
-  // API-kall: alltid nett, aldri cache
+  // API-kall: alltid nett
   if (API_HOSTS.some(host => url.hostname.includes(host))) {
     event.respondWith(fetch(event.request));
     return;
   }
 
-  // App-skall: cache-first, med nett som fallback
+  // index.html: nett-først, cache som fallback
+  if (url.pathname.endsWith('/') || url.pathname.endsWith('index.html')) {
+    event.respondWith(
+      fetch(event.request)
+        .then(response => {
+          const toCache = response.clone();
+          caches.open(CACHE_NAME).then(cache => cache.put(event.request, toCache));
+          return response;
+        })
+        .catch(() => caches.match(event.request))
+    );
+    return;
+  }
+
+  // Alt annet: cache-first
   event.respondWith(
     caches.match(event.request).then(cached => {
       return cached || fetch(event.request).then(response => {
-        // Bare cache gyldige svar
-        if (!response || response.status !== 200 || response.type !== 'basic') {
-          return response;
-        }
+        if (!response || response.status !== 200 || response.type !== 'basic') return response;
         const toCache = response.clone();
-        caches.open(CACHE_NAME).then(cache => {
-          cache.put(event.request, toCache);
-        });
+        caches.open(CACHE_NAME).then(cache => cache.put(event.request, toCache));
         return response;
       });
     })
