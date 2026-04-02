@@ -76,7 +76,6 @@ ICE_PARAMS = [
     "temperature-2m",
     "wind-speed-100m",
     "wind-direction-100m",
-    "total-cloud-cover",
 ]
 SEA_PARAMS = ["pressure-sealevel", "temperature-2m"]
 
