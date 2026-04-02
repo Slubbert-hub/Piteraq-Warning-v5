@@ -824,10 +824,7 @@ def fields_for_valid_time(cache, valid_time):
     elif sum(1 for v in wind_dir_vals if is_num(v)) < 3:
         quality_flags.append("missing_ice_wind_direction_partial")
 
-    if sum(1 for v in cloud_vals if is_num(v)) == 0:
-        quality_flags.append("missing_cloud_cover_all")
-    elif sum(1 for v in cloud_vals if is_num(v)) < 3:
-        quality_flags.append("missing_cloud_cover_partial")
+    # cloud cover deaktivert midlertidig for å redusere DMI-belastning
 
     if not is_num(ice_stability_proxy):
         quality_flags.append("missing_ice_stability_proxy")
@@ -950,7 +947,7 @@ def fields_for_valid_time(cache, valid_time):
         "usedIceTempPoints": sum(1 for v in temp_vals if is_num(v)),
         "usedIceWindPoints": sum(1 for v in wind_vals if is_num(v)),
         "usedIceWindDirPoints": sum(1 for v in wind_dir_vals if is_num(v)),
-        "usedIceCloudPoints": sum(1 for v in cloud_vals if is_num(v)),
+        "usedIceCloudPoints": 0,
         "usedSeaPressurePoints": len(sea_candidates),
         "usedSeaTempPoints": len(sea_temps),
     }
