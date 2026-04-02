@@ -71,13 +71,18 @@ MID_NAMES = ["C1", "C2", "M1", "M2", "M3"]
 EAST_NAMES = ["E1", "E2"]
 ALL_STRAIT_NAMES = WEST_NAMES + MID_NAMES + EAST_NAMES
 
-ICE_PARAMS = [
+ICE_PARAMS_CORE = [
     "pressure-sealevel",
     "temperature-2m",
     "wind-speed-100m",
     "wind-direction-100m",
 ]
+ICE_PARAMS_EXTRA = ["total-cloud-cover"]
+ICE_PARAMS = ICE_PARAMS_CORE
 SEA_PARAMS = ["pressure-sealevel", "temperature-2m"]
+
+EXTRA_REQUEST_SLEEP = 0.6
+EXTRA_REQUEST_RETRIES = 2
 
 TREND_TOLERANCES = {
     "h6": timedelta(hours=1.5),
@@ -616,6 +621,88 @@ def append_instance_to_cache(cache, iid):
             block["rows"] = sorted(dedup.values(), key=lambda x: x["dt"])
 
     return all_errors
+
+
+def get_json_extra(url, params=None, retries=EXTRA_REQUEST_RETRIES):
+    last_err = None
+    for attempt in range(retries):
+        try:
+            time.sleep(EXTRA_REQUEST_SLEEP)
+            r = requests.get(url, params=params, timeout=(CONNECT_TIMEOUT, READ_TIMEOUT))
+
+            if r.status_code == 429:
+                wait = 6 + attempt * 8
+                print(f"DMI extra rate limit (429). Waiting {wait}s...")
+                time.sleep(wait)
+                continue
+
+            r.raise_for_status()
+            return r.json()
+
+        except requests.exceptions.ReadTimeout as e:
+            last_err = e
+            wait = 3 + attempt * 4
+            print(f"DMI extra read timeout. Waiting {wait}s before retry...")
+            time.sleep(wait)
+
+        except requests.exceptions.ConnectTimeout as e:
+            last_err = e
+            wait = 3 + attempt * 4
+            print(f"DMI extra connect timeout. Waiting {wait}s before retry...")
+            time.sleep(wait)
+
+        except Exception as e:
+            last_err = e
+            wait = 2 + attempt * 3
+            print(f"DMI extra request failed: {type(e).__name__}. Waiting {wait}s...")
+            time.sleep(wait)
+
+    raise last_err
+
+
+def fetch_position_extra(instance_id, lon, lat, parameter_names):
+    url = f"{BASE}/collections/{COL}/instances/{instance_id}/position"
+    params = {
+        "coords": f"POINT({lon} {lat})",
+        "parameter-name": ",".join(parameter_names),
+        "crs": "crs84",
+        "f": "CoverageJSON",
+    }
+    return get_json_extra(url, params=params)
+
+
+def fetch_cloud_cover_bonus(instance_id, valid_time):
+    cloud_vals = []
+    errors = {}
+
+    for p in ICE_POINTS:
+        try:
+            data = fetch_position_extra(instance_id, p["lon"], p["lat"], ICE_PARAMS_EXTRA)
+            if not isinstance(data, dict):
+                continue
+            times, values = parse_coverage_series(data, ICE_PARAMS_EXTRA)
+            if valid_time not in times:
+                continue
+            idx = times.index(valid_time)
+            cc = safe_get(values.get("total-cloud-cover", []), idx)
+            if is_num(cc):
+                cloud_vals.append(cc)
+        except Exception as e:
+            errors[f"ice_extra:{p['name']}"] = f"{type(e).__name__}: {e}"
+
+    cloud_cover_mean = avg(cloud_vals)
+    radiative_cooling_proxy = (
+        clamp(1.0 - cloud_cover_mean, 0.0, 1.0)
+        if is_num(cloud_cover_mean)
+        else None
+    )
+
+    return {
+        "cloudCoverMean": cloud_cover_mean,
+        "radiativeCoolingProxy": radiative_cooling_proxy,
+        "usedIceCloudPoints": len(cloud_vals),
+        "errors": errors,
+    }
 
 
 def build_master_time_axis(cache):
@@ -1403,11 +1490,11 @@ def build_payload(now_dt):
     latest = instance_ids[-1]
     prev_instance = instance_ids[-2] if len(instance_ids) >= 2 else None
     candidate_instance_ids = [latest] + ([prev_instance] if prev_instance else [])
-    older_instance_ids = [iid for iid in instance_ids[:-1][-5:] if iid != prev_instance]
+    older_instance_ids = [iid for iid in instance_ids[:-1][-5:] if iid not in candidate_instance_ids]
 
     chosen_instance = None
     cache = None
-    fetch_errors = {}
+    fetch_errors_now = {}
     valid_now = None
     dt_now = None
     diff_now = None
@@ -1416,23 +1503,20 @@ def build_payload(now_dt):
     for iid in candidate_instance_ids:
         trial_cache = build_empty_cache()
         trial_errors = append_instance_to_cache(trial_cache, iid)
-        if trial_errors:
-            fetch_errors[iid] = trial_errors
-
         trial_valid_now, trial_dt_now, trial_diff_now, trial_now_fields = find_best_valid_time_with_fields(
             trial_cache, now_dt, tolerance_hours=TIME_TOLERANCE_HOURS
         )
-
         if trial_now_fields is not None:
             chosen_instance = iid
             cache = trial_cache
+            fetch_errors_now = trial_errors
             valid_now = trial_valid_now
             dt_now = trial_dt_now
             diff_now = trial_diff_now
             now_fields = trial_now_fields
             break
 
-    if now_fields is None:
+    if valid_now is None or now_fields is None:
         prev = load_json(DATA_FILE, {})
         if isinstance(prev, dict) and prev.get("inputs") and prev.get("derived"):
             prev_meta = prev.get("meta", {})
@@ -1464,6 +1548,20 @@ def build_payload(now_dt):
 
         raise RuntimeError("Kunne ikke lese now-felter fra DMI-data.")
 
+    extra_errors = {}
+    cloud_bonus = fetch_cloud_cover_bonus(chosen_instance, valid_now) if chosen_instance and valid_now else None
+    if isinstance(cloud_bonus, dict):
+        now_fields["cloudCoverMean"] = cloud_bonus.get("cloudCoverMean")
+        now_fields["radiativeCoolingProxy"] = cloud_bonus.get("radiativeCoolingProxy")
+        now_fields["usedIceCloudPoints"] = cloud_bonus.get("usedIceCloudPoints", 0)
+        extra_errors = cloud_bonus.get("errors", {}) or {}
+        if now_fields["usedIceCloudPoints"] == 0:
+            now_fields.setdefault("qualityFlags", [])
+            now_fields["qualityFlags"] = sorted(set(now_fields["qualityFlags"] + ["missing_cloud_cover_bonus"]))
+        elif now_fields["usedIceCloudPoints"] < len(ICE_POINTS):
+            now_fields.setdefault("qualityFlags", [])
+            now_fields["qualityFlags"] = sorted(set(now_fields["qualityFlags"] + ["missing_cloud_cover_bonus_partial"]))
+
     current_snapshot = build_snapshot(dt_now, now_fields)
     history.append(current_snapshot)
     history = sort_and_dedup_history(history)
@@ -1476,6 +1574,14 @@ def build_payload(now_dt):
 
     save_json(HISTORY_FILE, history)
 
+    fetch_errors = {}
+    merged_now_errors = {}
+    if fetch_errors_now:
+        merged_now_errors.update(fetch_errors_now)
+    if extra_errors:
+        merged_now_errors.update(extra_errors)
+    if merged_now_errors:
+        fetch_errors[chosen_instance or latest] = merged_now_errors
     fetch_errors.update(fetch_errors_backfill)
 
     snap_6 = find_history_snapshot(
@@ -1954,7 +2060,7 @@ def build_payload(now_dt):
             "location": LOCATION_NAME,
             "model": COL,
             "forecastInfo": "Latest available forecast step",
-            "instanceId": chosen_instance,
+            "instanceId": chosen_instance or latest,
             "lastSuccessfulUpdate": now_str,
             "lastAttemptFailed": None,
             "stale": False,
