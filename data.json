@@ -1,7 +1,7 @@
 {
   "meta": {
     "source": "DMI HARMONIE",
-    "updatedAt": "2026-04-02 23:10 UTC",
+    "updatedAt": "2026-04-02 23:44 UTC",
     "location": "TASIILAQ",
     "model": "harmonie_ig_sf",
     "forecastInfo": "Now-felt manglet i DMI; beholdt siste gyldige datasett",
@@ -150,11 +150,18 @@
     "usedIceTempPoints": 2,
     "usedIceWindPoints": 2,
     "usedSeaPressurePoints": 6,
-    "usedSeaTempPoints": 8
+    "usedSeaTempPoints": 8,
+    "loadQualityScore": 24,
+    "loadQualityLevel": "LOW",
+    "loadQualityColor": "ORG",
+    "hazardQualityScore": 40,
+    "hazardQualityLevel": "LOW",
+    "hazardQualityColor": "ORG",
+    "dataStatusLabel": "STALE"
   },
   "output": {
     "level": "GRN",
-    "phase": "STALE (STALE (PITERAQ LOW))",
-    "message": "GRN4 LOADLOW PITGRN H24-48T RES10 TRG4 CPL52 GR4.3 LPV-14E LPD0 VG-2 CG2"
+    "phase": "STALE (PITERAQ LOW))",
+    "message": "GRN4 LOADLOW PITGRN H24-48T RES10 TRG4 CPL52 GR4.3 LPV-14E LPD0 VG-2 CG2 LQ:L HQ:L D:STALE"
   }
 }
