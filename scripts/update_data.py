@@ -1401,8 +1401,32 @@ def build_payload(now_dt):
 
     now_fields = fields_for_valid_time(cache, valid_now)
     if now_fields is None:
-        write_stale_payload(RuntimeError("Kunne ikke lese now-felter fra DMI-data."))
-        return load_json(DATA_FILE, {})
+        prev = load_json(DATA_FILE, {})
+        if isinstance(prev, dict) and prev.get("inputs") and prev.get("derived"):
+            prev_meta = prev.get("meta", {})
+            prev_derived = prev.get("derived", {})
+            prev_output = prev.get("output", {})
+
+            qf = prev_derived.get("qualityFlags", [])
+            if not isinstance(qf, list):
+                qf = []
+
+            prev_meta["updatedAt"] = now_utc_str()
+            prev_meta["forecastInfo"] = "Now-felt manglet i DMI; beholdt siste gyldige datasett"
+            prev_meta["lastAttemptFailed"] = "missing_now_fields"
+            prev_meta["stale"] = True
+
+            prev_derived["trendDataStatus"] = "stale: missing_now_fields"
+            prev_derived["qualityFlags"] = sorted(set(qf + ["missing_now_fields", "stale_due_to_failed_update"]))
+
+            prev_output["phase"] = f"STALE ({prev_output.get('phase', 'UNKNOWN')})"
+
+            prev["meta"] = prev_meta
+            prev["derived"] = prev_derived
+            prev["output"] = prev_output
+            return prev
+
+        raise RuntimeError("Kunne ikke lese now-felter fra DMI-data.")
 
     current_snapshot = build_snapshot(dt_now, now_fields)
     history.append(current_snapshot)
