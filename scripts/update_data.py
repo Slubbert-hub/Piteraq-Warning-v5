@@ -587,7 +587,6 @@ def append_instance_to_cache(cache, iid):
                     "temperature-2m": safe_get(values.get("temperature-2m", []), i),
                     "wind-speed-100m": safe_get(values.get("wind-speed-100m", []), i),
                     "wind-direction-100m": safe_get(values.get("wind-direction-100m", []), i),
-                    "total-cloud-cover": safe_get(values.get("total-cloud-cover", []), i),
                 }
             )
 
