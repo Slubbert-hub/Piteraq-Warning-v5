@@ -264,6 +264,30 @@
       line-height: 1.2;
       font-weight: 700;
     }
+
+    .qual-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 10px;
+    }
+
+    .qual-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border-radius: 999px;
+      padding: 8px 12px;
+      font-size: 0.86rem;
+      font-weight: 800;
+      background: rgba(255,255,255,0.08);
+      color: var(--text);
+    }
+
+    .qual-badge.GRN { background: rgba(37, 211, 102, 0.22); }
+    .qual-badge.YEL { background: rgba(241, 194, 50, 0.22); }
+    .qual-badge.ORG { background: rgba(255, 159, 67, 0.22); }
+    .qual-badge.RED { background: rgba(255, 107, 107, 0.22); }
   </style>
 </head>
 <body>
@@ -287,6 +311,7 @@
 
       <div id="risk-phase" class="phase">—</div>
       <div id="risk-watch" class="watch">Watch —</div>
+      <div id="quality-badges" class="qual-row"></div>
 
       <div id="msg-box" class="msg-box">Laster …</div>
 
@@ -375,6 +400,19 @@
       return 'GRN';
     }
 
+    function qualityClass(level) {
+      if (level === 'HIGH') return 'GRN';
+      if (level === 'MED') return 'YEL';
+      return 'ORG';
+    }
+
+    function qualityBadge(label, level, score) {
+      const lvl = String(level || 'LOW').toUpperCase();
+      const cls = qualityClass(lvl);
+      const extra = isNum(score) ? ` · ${fmt0(score)}/100` : '';
+      return `<span class="qual-badge ${cls}">${label} ${lvl}${extra}</span>`;
+    }
+
     function metricCard({ label, value, desc = '', tiny = '' }) {
       return `
         <div class="metric">
@@ -437,6 +475,11 @@ function buildCompactMessage(data) {
       const loadLevel = derived.katabaticReadinessLevel || data.katabaticReadinessLevel || 'LOW';
       const pitLevel = derived.piteraqHazardLevel || data.piteraqHazardLevel || level;
       const sustainedStage = derived.sustainedPiteraqStage || data.sustainedPiteraqStage || null;
+      const loadQualityLevel = derived.loadQualityLevel || data.loadQualityLevel || 'LOW';
+      const hazardQualityLevel = derived.hazardQualityLevel || data.hazardQualityLevel || 'LOW';
+      const loadQualityScore = derived.loadQualityScore ?? data.loadQualityScore;
+      const hazardQualityScore = derived.hazardQualityScore ?? data.hazardQualityScore;
+      const dataStatusLabel = derived.dataStatusLabel || data.dataStatusLabel || (meta.stale ? 'STALE' : 'FRESH');
 
       document.getElementById('hero-location').textContent = location;
       document.getElementById('hero-updated').textContent = `Oppdatert ${updatedAt}`;
@@ -451,6 +494,11 @@ function buildCompactMessage(data) {
       document.getElementById('risk-phase').textContent =
         `LOAD ${loadLevel} · PIT ${pitLevel}`;
       document.getElementById('risk-watch').textContent = '';
+      document.getElementById('quality-badges').innerHTML = [
+        qualityBadge('LOAD-kvalitet', loadQualityLevel, loadQualityScore),
+        qualityBadge('Farekvalitet', hazardQualityLevel, hazardQualityScore),
+        `<span class="qual-badge ${dataStatusLabel === 'FRESH' ? 'GRN' : 'ORG'}">Data ${dataStatusLabel}</span>`
+      ].join('');
 
       const trendText = derived.trendDataStatus || data.trendDataStatus || '–';
       const trendEl = document.getElementById('trend-status');
@@ -461,7 +509,7 @@ function buildCompactMessage(data) {
         ? derived.qualityFlags
         : (Array.isArray(data.qualityFlags) ? data.qualityFlags : []);
       const qualityEl = document.getElementById('quality-status');
-      qualityEl.textContent = `Datakvalitet: ${qFlags.length ? qFlags.join(', ') : 'OK'}`;
+      qualityEl.textContent = `Datakvalitet: LOAD ${loadQualityLevel} · HAZARD ${hazardQualityLevel} · ${qFlags.length ? qFlags.join(', ') : 'OK'}`;
       qualityEl.className = qFlags.length ? 'warn' : 'ok';
 
       document.getElementById('last-success').textContent =
@@ -510,6 +558,18 @@ function buildCompactMessage(data) {
           label: 'Risiko',
           value: `${fmt0(scores.risk)}/100`,
           desc: `${meta.location || 'Tasiilaq'} · ${meta.model || 'modell'}`
+        }),
+        metricCard({
+          label: 'LOAD quality',
+          value: `${derived.loadQualityLevel || 'LOW'}`,
+          desc: isNum(derived.loadQualityScore) ? `score ${fmt0(derived.loadQualityScore)}/100` : 'datagrunnlag for ladning',
+          tiny: derived.dataStatusLabel ? `data ${derived.dataStatusLabel}` : ''
+        }),
+        metricCard({
+          label: 'Hazard quality',
+          value: `${derived.hazardQualityLevel || 'LOW'}`,
+          desc: isNum(derived.hazardQualityScore) ? `score ${fmt0(derived.hazardQualityScore)}/100` : 'datagrunnlag for farevarsel',
+          tiny: Array.isArray(derived.qualityFlags) && derived.qualityFlags.length ? `${derived.qualityFlags.length} kvalitetsflagg` : 'ingen kvalitetsflagg'
         }),
         metricCard({
           label: 'Sustained piteraq',
@@ -633,38 +693,15 @@ function buildCompactMessage(data) {
           desc: 'støtte for katabatisk respons'
         }),
         metricCard({
-          label: 'Stability',
-          value: isNum(derived.iceStabilityProxy) ? `${fmt1(derived.iceStabilityProxy)}°` : '–',
-          desc: 'source minus mouth',
-          tiny: 'positiv = sterkere kaldluftslager'
-        }),
-        metricCard({
-          label: 'Dir align',
-          value: isNum(derived.katabaticDirectionAlignment) ? `${fmt0(derived.katabaticDirectionAlignment * 100)}/100` : '–',
-          desc: isNum(derived.iceWindDirectionMean)
-            ? `vind ${fmt1(derived.iceWindDirectionMean)}°`
-            : 'dreneringsretning vs vind',
-          tiny: isNum(derived.katabaticDirectionScore) ? `score ${fmt0(derived.katabaticDirectionScore)}/100` : ''
-        }),
-        metricCard({
-          label: 'Clear-sky',
-          value: isNum(derived.radiativeCoolingProxy) ? `${fmt0(derived.radiativeCoolingProxy * 100)}/100` : '–',
-          desc: 'klarvær / radiativ kjøling',
-          tiny: isNum(derived.cloudCoverMean)
-            ? `skydekke ${fmt1(derived.cloudCoverMean)} · rad ${fmt0(derived.katabaticRadiationScore)}/100`
-            : ''
-        }),
-        metricCard({
-          label: 'Regional støtte',
-          value: isNum(derived.regionalPressureSupport) ? `${fmt0(derived.regionalPressureSupport)}/100` : '–',
-          desc: isNum(derived.regionalEWGradient)
-            ? `EW-gradient ${fmtSigned(derived.regionalEWGradient, 2, ' hPa')}`
-            : 'vest–øst trykksignal'
-        }),
-        metricCard({
           label: 'Ladning / mismatch',
           value: yesNo(derived.isLadning, 'LAD', 'NEI'),
           desc: derived.piteraqMismatch ? 'synoptic > piteraq mismatch' : 'ingen mismatch'
+        }),
+        metricCard({
+          label: 'Datastatus',
+          value: derived.dataStatusLabel || (meta.stale ? 'STALE' : 'FRESH'),
+          desc: `is ${fmt0(derived.usedIcePressurePoints)}/3 · sea ${fmt0(derived.usedSeaPressurePoints)}`,
+          tiny: `trend ${derived.trendDataStatus || '–'}`
         })
       ].join('');
 
@@ -677,6 +714,8 @@ function buildCompactMessage(data) {
           <span class="pill">trend ${derived.trendDataStatus || '–'}</span>
           <span class="pill">watch ${derived.watch ? 'ON' : 'OFF'}</span>
           <span class="pill">stale ${meta.stale ? 'ja' : 'nei'}</span>
+          <span class="pill">load quality ${derived.loadQualityLevel || '–'}${isNum(derived.loadQualityScore) ? ` ${fmt0(derived.loadQualityScore)}/100` : ''}</span>
+          <span class="pill">hazard quality ${derived.hazardQualityLevel || '–'}${isNum(derived.hazardQualityScore) ? ` ${fmt0(derived.hazardQualityScore)}/100` : ''}</span>
         </div>
         <div class="pill-row">
           <span class="pill">brukte instanser ${usedInstances.length ? usedInstances.join(', ') : '–'}</span>
