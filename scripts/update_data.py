@@ -661,15 +661,11 @@ def find_best_valid_time_with_fields(cache, target_dt, tolerance_hours=TIME_TOLE
             candidates.append((diff_h, item))
 
     candidates.sort(key=lambda x: x[0])
-    print(f"Testing {len(candidates)} candidate validTimes near now")
 
     for diff_h, item in candidates:
         fields = fields_for_valid_time(cache, item["validTime"])
         if fields is not None:
-            print(f"ACCEPTED validTime {item['validTime']} (diff {diff_h:.2f}h)")
             return item["validTime"], item["dt"], diff_h, fields
-        else:
-            print(f"REJECTED validTime {item['validTime']} (diff {diff_h:.2f}h): no usable fields")
 
     return None, None, None, None
 
@@ -800,7 +796,6 @@ def fields_for_valid_time(cache, valid_time):
         cloud_vals.append(cc if is_num(cc) else None)
 
     if sum(1 for v in pressure_vals if is_num(v)) == 0:
-        print(f"fields_for_valid_time({valid_time}): rejected - no ice pressure")
         return None
 
     ice_pressure = weighted_mean(pressure_vals, [0.40, 0.35, 0.25])
@@ -886,7 +881,6 @@ def fields_for_valid_time(cache, valid_time):
             sea_temps.append(kelvin_to_celsius(row.get("temperature-2m")))
 
     if not sea_candidates:
-        print(f"fields_for_valid_time({valid_time}): rejected - no sea pressure candidates")
         return None
 
     sea_min = min(sea_candidates, key=lambda x: x["pressure"])
@@ -1406,16 +1400,38 @@ def build_payload(now_dt):
     history = sort_and_dedup_history(load_json(HISTORY_FILE, []))
 
     instance_ids = list_instances()
-    latest = instance_ids[-1]
-    older_instance_ids = instance_ids[:-1][-5:]
+    candidate_instance_ids = list(reversed(instance_ids[-6:]))
 
-    cache = build_empty_cache()
-    fetch_errors_now = append_instance_to_cache(cache, latest)
+    chosen_instance = None
+    cache = None
+    fetch_errors_now = {}
+    valid_now = None
+    dt_now = None
+    diff_now = None
+    now_fields = None
 
-    valid_now, dt_now, diff_now, now_fields = find_best_valid_time_with_fields(
-        cache, now_dt, tolerance_hours=TIME_TOLERANCE_HOURS
-    )
-    if valid_now is None or now_fields is None:
+    for iid in candidate_instance_ids:
+        trial_cache = build_empty_cache()
+        trial_errors = append_instance_to_cache(trial_cache, iid)
+
+        trial_valid_now, trial_dt_now, trial_diff_now, trial_now_fields = find_best_valid_time_with_fields(
+            trial_cache, now_dt, tolerance_hours=TIME_TOLERANCE_HOURS
+        )
+
+        if trial_now_fields is not None:
+            chosen_instance = iid
+            cache = trial_cache
+            fetch_errors_now = trial_errors
+            valid_now = trial_valid_now
+            dt_now = trial_dt_now
+            diff_now = trial_diff_now
+            now_fields = trial_now_fields
+            print(f"Using fallback DMI instance {iid} for now-fields")
+            break
+
+    older_instance_ids = [iid for iid in instance_ids[:-1][-5:] if iid != chosen_instance]
+
+    if now_fields is None:
         prev = load_json(DATA_FILE, {})
         if isinstance(prev, dict) and prev.get("inputs") and prev.get("derived"):
             prev_meta = prev.get("meta", {})
@@ -1940,7 +1956,7 @@ def build_payload(now_dt):
             "location": LOCATION_NAME,
             "model": COL,
             "forecastInfo": "Latest available forecast step",
-            "instanceId": latest,
+            "instanceId": chosen_instance,
             "lastSuccessfulUpdate": now_str,
             "lastAttemptFailed": None,
             "stale": False,
@@ -1984,7 +2000,7 @@ def build_payload(now_dt):
             "cycloneInTriggerZone": cyclone_in_zone,
             "cycloneScore": int(round(cyclone_score)),
             "piteraqMismatch": piteraq_mismatch,
-            "usedInstanceIds": [latest],
+            "usedInstanceIds": [chosen_instance] if chosen_instance else [],
             "fetchErrors": fetch_errors,
             "seaMinLon": round(now_fields["seaMinLon"], 3) if is_num(now_fields["seaMinLon"]) else None,
             "seaMinLat": round(now_fields["seaMinLat"], 3) if is_num(now_fields["seaMinLat"]) else None,
