@@ -633,6 +633,35 @@ function buildCompactMessage(data) {
           desc: 'støtte for katabatisk respons'
         }),
         metricCard({
+          label: 'Stability',
+          value: isNum(derived.iceStabilityProxy) ? `${fmt1(derived.iceStabilityProxy)}°` : '–',
+          desc: 'source minus mouth',
+          tiny: 'positiv = sterkere kaldluftslager'
+        }),
+        metricCard({
+          label: 'Dir align',
+          value: isNum(derived.katabaticDirectionAlignment) ? `${fmt0(derived.katabaticDirectionAlignment * 100)}/100` : '–',
+          desc: isNum(derived.iceWindDirectionMean)
+            ? `vind ${fmt1(derived.iceWindDirectionMean)}°`
+            : 'dreneringsretning vs vind',
+          tiny: isNum(derived.katabaticDirectionScore) ? `score ${fmt0(derived.katabaticDirectionScore)}/100` : ''
+        }),
+        metricCard({
+          label: 'Clear-sky',
+          value: isNum(derived.radiativeCoolingProxy) ? `${fmt0(derived.radiativeCoolingProxy * 100)}/100` : '–',
+          desc: 'klarvær / radiativ kjøling',
+          tiny: isNum(derived.cloudCoverMean)
+            ? `skydekke ${fmt1(derived.cloudCoverMean)} · rad ${fmt0(derived.katabaticRadiationScore)}/100`
+            : ''
+        }),
+        metricCard({
+          label: 'Regional støtte',
+          value: isNum(derived.regionalPressureSupport) ? `${fmt0(derived.regionalPressureSupport)}/100` : '–',
+          desc: isNum(derived.regionalEWGradient)
+            ? `EW-gradient ${fmtSigned(derived.regionalEWGradient, 2, ' hPa')}`
+            : 'vest–øst trykksignal'
+        }),
+        metricCard({
           label: 'Ladning / mismatch',
           value: yesNo(derived.isLadning, 'LAD', 'NEI'),
           desc: derived.piteraqMismatch ? 'synoptic > piteraq mismatch' : 'ingen mismatch'
