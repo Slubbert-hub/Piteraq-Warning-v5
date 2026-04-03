@@ -1,5 +1,5 @@
 {
-  "updatedAt": "2026-04-03 11:30 UTC",
+  "updatedAt": "2026-04-03 12:08 UTC",
   "location": "TASIILAQ",
   "model": "harmonie_ig_sf",
   "instanceId": "2026-04-02T120000Z",
@@ -12,6 +12,8 @@
   "watch": false,
   "message": "GRN4 LOADLOW PITGRN H24-48T RES10 TRG4 CPL52 GR4.3 LPV-14E LPD0 VG-2 CG2 LQ:L HQ:L D:STALE",
   "trendDataStatus": "stale: missing_now_fields",
+  "trendGapHours6": null,
+  "trendGapHours12": null,
   "qualityFlags": [
     "lp_favored_alignment",
     "lp_near_favored_sector",
