@@ -759,6 +759,23 @@ def instance_is_reachable(instance_id):
         return False
 
 
+def choose_reachable_instance(candidates, label="instance"):
+    """Return the first reachable instance from a candidate list, or None."""
+    seen = set()
+    cleaned = []
+    for iid in candidates:
+        if iid and iid not in seen:
+            cleaned.append(iid)
+            seen.add(iid)
+
+    for iid in cleaned:
+        if instance_is_reachable(iid):
+            return iid
+        print(f"Skipping {label} {iid}: instance health check failed")
+
+    return None
+
+
 def fetch_points_parallel(instance_id, points, parameter_names, max_workers=MAX_WORKERS, retries=REQUEST_RETRIES):
     results = {}
     errors = {}
@@ -1705,10 +1722,13 @@ def build_payload(now_dt):
     diff_now = None
     now_fields = None
 
-    for iid in primary_now_candidates:
-        if not instance_is_reachable(iid):
-            print(f"Skipping full fetch for {iid}: instance health check failed")
-            continue
+    selected_primary = choose_reachable_instance(primary_now_candidates, label="primary now candidate")
+    if selected_primary is None and older_instance_ids:
+        print("Latest/primary candidates unavailable, trying older instances as now source")
+        selected_primary = choose_reachable_instance(list(reversed(older_instance_ids[-3:])), label="older now fallback")
+
+    primary_fetch_candidates = [selected_primary] if selected_primary else []
+    for iid in primary_fetch_candidates:
         trial_cache = build_empty_cache()
         trial_errors = append_instance_to_cache(trial_cache, iid)
         trial_valid_now, trial_dt_now, trial_diff_now, trial_now_fields = find_best_valid_time_with_fields(
@@ -1730,14 +1750,15 @@ def build_payload(now_dt):
             max_requests=FALLBACK_MAX_REQUESTS_PER_RUN,
             max_rate_limit_hits=FALLBACK_MAX_RATE_LIMIT_HITS,
         )
-        if instance_is_reachable(extra_now_instance):
+        selected_extra = choose_reachable_instance([extra_now_instance], label="extra now fallback")
+        if selected_extra:
             trial_cache = build_empty_cache()
-            trial_errors = append_instance_to_cache(trial_cache, extra_now_instance, request_retries=BACKFILL_REQUEST_RETRIES)
+            trial_errors = append_instance_to_cache(trial_cache, selected_extra, request_retries=BACKFILL_REQUEST_RETRIES)
             trial_valid_now, trial_dt_now, trial_diff_now, trial_now_fields = find_best_valid_time_with_fields(
                 trial_cache, now_dt, tolerance_hours=9.0
             )
             if trial_now_fields is not None:
-                chosen_instance = extra_now_instance
+                chosen_instance = selected_extra
                 cache = trial_cache
                 fetch_errors_now = trial_errors
                 valid_now = trial_valid_now
