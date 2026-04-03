@@ -91,8 +91,12 @@ ENABLE_BONUS_FETCH = os.getenv("PITERAQ_ENABLE_BONUS", "1") == "1"
 # DMI hygiene controls
 MAX_REQUESTS_PER_RUN = int(os.getenv("PITERAQ_MAX_REQUESTS", "45"))
 MAX_RATE_LIMIT_HITS = int(os.getenv("PITERAQ_MAX_429", "2"))
+FALLBACK_MAX_REQUESTS_PER_RUN = int(os.getenv("PITERAQ_FALLBACK_MAX_REQUESTS", "8"))
+FALLBACK_MAX_RATE_LIMIT_HITS = int(os.getenv("PITERAQ_FALLBACK_MAX_429", "1"))
 BACKFILL_MAX_INSTANCES = 2
 BACKFILL_REQUEST_RETRIES = 1
+INSTANCE_CHECK_CONNECT_TIMEOUT = float(os.getenv("PITERAQ_INSTANCE_CHECK_CONNECT_TIMEOUT", "6"))
+INSTANCE_CHECK_READ_TIMEOUT = float(os.getenv("PITERAQ_INSTANCE_CHECK_READ_TIMEOUT", "15"))
 
 SEA_POINTS_BACKFILL = [
     {"name": "W3", "lon": -32.5, "lat": 64.8},
@@ -102,12 +106,16 @@ SEA_POINTS_BACKFILL = [
 
 _global_rate_limit_hits = 0
 _global_request_count = 0
+_global_request_budget = MAX_REQUESTS_PER_RUN
+_global_rate_limit_threshold = MAX_RATE_LIMIT_HITS
 
 
-def reset_request_counters():
-    global _global_rate_limit_hits, _global_request_count
+def reset_request_counters(max_requests=None, max_rate_limit_hits=None):
+    global _global_rate_limit_hits, _global_request_count, _global_request_budget, _global_rate_limit_threshold
     _global_rate_limit_hits = 0
     _global_request_count = 0
+    _global_request_budget = MAX_REQUESTS_PER_RUN if max_requests is None else max_requests
+    _global_rate_limit_threshold = MAX_RATE_LIMIT_HITS if max_rate_limit_hits is None else max_rate_limit_hits
 
 
 TREND_TOLERANCES = {
@@ -580,9 +588,9 @@ def get_json(url, params=None, retries=REQUEST_RETRIES):
     last_err = None
 
     for attempt in range(retries):
-        if _global_request_count >= MAX_REQUESTS_PER_RUN:
-            raise RuntimeError(f"DMI request budget exhausted ({MAX_REQUESTS_PER_RUN})")
-        if _global_rate_limit_hits >= MAX_RATE_LIMIT_HITS:
+        if _global_request_count >= _global_request_budget:
+            raise RuntimeError(f"DMI request budget exhausted ({_global_request_budget})")
+        if _global_rate_limit_hits >= _global_rate_limit_threshold:
             raise RuntimeError("DMI circuit breaker: rate limit threshold reached")
 
         try:
@@ -595,7 +603,7 @@ def get_json(url, params=None, retries=REQUEST_RETRIES):
                 wait = 6 + attempt * 8
                 print(f"DMI rate limit (429) hit #{_global_rate_limit_hits}. Waiting {wait}s...")
                 time.sleep(wait)
-                if _global_rate_limit_hits >= MAX_RATE_LIMIT_HITS:
+                if _global_rate_limit_hits >= _global_rate_limit_threshold:
                     raise RuntimeError("DMI circuit breaker triggered")
                 continue
 
@@ -704,6 +712,51 @@ def build_empty_cache():
         }
 
     return merged
+
+
+def instance_is_reachable(instance_id):
+    """Cheap health check: one point, one parameter, no retries."""
+    global _global_request_count, _global_rate_limit_hits
+
+    if _global_request_count >= _global_request_budget:
+        print(f"Skipping health check for {instance_id}: request budget exhausted")
+        return False
+    if _global_rate_limit_hits >= _global_rate_limit_threshold:
+        print(f"Skipping health check for {instance_id}: circuit breaker already active")
+        return False
+
+    url = f"{BASE}/collections/{COL}/instances/{instance_id}/position"
+    params = {
+        "coords": f"POINT({ICE_POINTS[0]['lon']} {ICE_POINTS[0]['lat']})",
+        "parameter-name": "pressure-sealevel",
+        "crs": "crs84",
+        "f": "CoverageJSON",
+    }
+
+    try:
+        time.sleep(min(REQUEST_SLEEP, 0.3))
+        _global_request_count += 1
+        r = requests.get(url, params=params, timeout=(INSTANCE_CHECK_CONNECT_TIMEOUT, INSTANCE_CHECK_READ_TIMEOUT))
+        if r.status_code == 429:
+            _global_rate_limit_hits += 1
+            print(f"Instance health check hit 429 for {instance_id}")
+            return False
+        if r.status_code == 502:
+            print(f"Instance {instance_id} health check got 502")
+            return False
+        if r.status_code != 200:
+            print(f"Instance {instance_id} health check status {r.status_code}")
+            return False
+        return True
+    except requests.exceptions.ReadTimeout:
+        print(f"Instance {instance_id} health check timed out")
+        return False
+    except requests.exceptions.ConnectTimeout:
+        print(f"Instance {instance_id} health check connect timed out")
+        return False
+    except Exception as e:
+        print(f"Instance {instance_id} health check failed: {type(e).__name__}")
+        return False
 
 
 def fetch_points_parallel(instance_id, points, parameter_names, max_workers=MAX_WORKERS, retries=REQUEST_RETRIES):
@@ -1636,14 +1689,8 @@ def build_payload(now_dt):
     latest = instance_ids[-1]
     prev_instance = instance_ids[-2] if len(instance_ids) >= 2 else None
     extra_now_instance = instance_ids[-3] if len(instance_ids) >= 3 else None
-    candidate_instance_ids = [latest] + ([prev_instance] if prev_instance else [])
-
-    # One extra controlled fallback for now-fields: prefer a slightly older
-    # instance over falling straight back to very old cached data.
-    if extra_now_instance and extra_now_instance not in candidate_instance_ids:
-        candidate_instance_ids.append(extra_now_instance)
-
-    older_instance_ids = [iid for iid in instance_ids[:-1][-BACKFILL_MAX_INSTANCES:] if iid not in candidate_instance_ids]
+    primary_now_candidates = [latest] + ([prev_instance] if prev_instance else [])
+    older_instance_ids = [iid for iid in instance_ids[:-1][-BACKFILL_MAX_INSTANCES:] if iid not in primary_now_candidates and iid != extra_now_instance]
 
     chosen_instance = None
     cache = None
@@ -1653,9 +1700,10 @@ def build_payload(now_dt):
     diff_now = None
     now_fields = None
 
-    for idx, iid in enumerate(candidate_instance_ids):
-        if idx >= 2:
-            print(f"Trying extra now fallback instance {iid}")
+    for iid in primary_now_candidates:
+        if not instance_is_reachable(iid):
+            print(f"Skipping full fetch for {iid}: instance health check failed")
+            continue
         trial_cache = build_empty_cache()
         trial_errors = append_instance_to_cache(trial_cache, iid)
         trial_valid_now, trial_dt_now, trial_diff_now, trial_now_fields = find_best_valid_time_with_fields(
@@ -1670,6 +1718,27 @@ def build_payload(now_dt):
             diff_now = trial_diff_now
             now_fields = trial_now_fields
             break
+
+    if valid_now is None and extra_now_instance:
+        print(f"Trying extra now fallback instance {extra_now_instance}")
+        reset_request_counters(
+            max_requests=FALLBACK_MAX_REQUESTS_PER_RUN,
+            max_rate_limit_hits=FALLBACK_MAX_RATE_LIMIT_HITS,
+        )
+        if instance_is_reachable(extra_now_instance):
+            trial_cache = build_empty_cache()
+            trial_errors = append_instance_to_cache(trial_cache, extra_now_instance, request_retries=BACKFILL_REQUEST_RETRIES)
+            trial_valid_now, trial_dt_now, trial_diff_now, trial_now_fields = find_best_valid_time_with_fields(
+                trial_cache, now_dt, tolerance_hours=9.0
+            )
+            if trial_now_fields is not None:
+                chosen_instance = extra_now_instance
+                cache = trial_cache
+                fetch_errors_now = trial_errors
+                valid_now = trial_valid_now
+                dt_now = trial_dt_now
+                diff_now = trial_diff_now
+                now_fields = trial_now_fields
 
     if valid_now is None or now_fields is None:
         prev = load_json(DATA_FILE, {})
