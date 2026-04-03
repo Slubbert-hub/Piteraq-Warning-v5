@@ -491,6 +491,81 @@ def build_quality_tag(level, prefix):
     return f"{prefix}:{level[:1]}"
 
 
+def parse_iso_safe(value):
+    if not value:
+        return None
+    txt = str(value).strip()
+    try:
+        return parse_iso(txt)
+    except Exception:
+        pass
+    for fmt in ("%Y-%m-%d %H:%M UTC", "%Y-%m-%d %H:%M:%S UTC"):
+        try:
+            return datetime.strptime(txt, fmt).replace(tzinfo=timezone.utc)
+        except Exception:
+            pass
+    return None
+
+
+def compute_last_success_age_hours(meta):
+    if not isinstance(meta, dict):
+        return None
+    updated_dt = parse_iso_safe(meta.get("updatedAt")) or now_utc()
+    success_dt = parse_iso_safe(meta.get("lastSuccessfulUpdate"))
+    if not success_dt:
+        return None
+    return max(0.0, (updated_dt - success_dt).total_seconds() / 3600.0)
+
+
+def operational_data_quality(meta, derived, quality_flags):
+    quality_flags = set(quality_flags or [])
+    stale_flag = bool(meta.get("stale"))
+    age_h = compute_last_success_age_hours(meta)
+
+    selected_instance = derived.get("selectedNowInstance") or meta.get("instanceId")
+    requested_instance = derived.get("requestedNowInstance") or meta.get("requestedInstanceId")
+    fallback_used = bool(derived.get("usedFallbackNowInstance")) or (
+        selected_instance and requested_instance and selected_instance != requested_instance
+    )
+
+    degraded_flags = {
+        "partial_point_fetch_errors",
+        "missing_ice_temperature_partial",
+        "missing_ice_wind_partial",
+        "missing_sea_temperature_partial",
+        "missing_cloud_cover_partial",
+        "missing_gate_mid",
+        "missing_gate_east",
+        "missing_coast_gate",
+        "trend_gap_too_large",
+        "trend_gap12_too_large",
+    }
+
+    if stale_flag or "missing_now_fields" in quality_flags or age_h is None or age_h > 12.0:
+        return "stale", age_h, fallback_used
+
+    if fallback_used or age_h > 4.0 or any(flag in quality_flags for flag in degraded_flags):
+        return "degraded", age_h, fallback_used
+
+    return "fresh", age_h, fallback_used
+
+
+def alert_confidence_for_quality(data_quality):
+    if data_quality == "fresh":
+        return "high"
+    if data_quality == "degraded":
+        return "medium"
+    return "low"
+
+
+def data_quality_label(data_quality):
+    return str(data_quality or "stale").upper()
+
+
+def alert_confidence_label(confidence):
+    return str(confidence or "low").upper()
+
+
 def annotate_payload_quality(payload):
     if not isinstance(payload, dict):
         return payload
@@ -517,6 +592,7 @@ def annotate_payload_quality(payload):
     load_score += 18.0 * norm(ice_t, 0.0, 3.0)
     load_score += 18.0 * norm(ice_w, 0.0, 3.0)
     load_score += 8.0 * norm(derived.get("usedIceWindDirPoints"), 0.0, 3.0)
+    load_score += 8.0 * norm(derived.get("usedIceCloudPoints"), 0.0, 3.0)
     load_score += 10.0 * (1.0 if trend == "ok" else 0.55 if "partial" in trend else 0.25)
     load_score += 10.0 * (0.0 if stale else 1.0)
     load_score += 8.0 * (0.0 if "missing_now_fields" in quality_flags else 1.0)
@@ -526,6 +602,8 @@ def annotate_payload_quality(payload):
         load_score -= 8.0
     if "missing_ice_wind_partial" in quality_flags:
         load_score -= 8.0
+    if "missing_cloud_cover_partial" in quality_flags:
+        load_score -= 4.0
     if "partial_point_fetch_errors" in quality_flags:
         load_score -= 5.0
     if "trend_gap_too_large" in quality_flags:
@@ -558,7 +636,10 @@ def annotate_payload_quality(payload):
 
     load_level = quality_level(load_score)
     hazard_level = quality_level(hazard_score)
-    data_status = "STALE" if stale else "FRESH"
+    data_quality, age_h, fallback_used = operational_data_quality(meta, derived, quality_flags)
+    alert_confidence = alert_confidence_for_quality(data_quality)
+    data_status = data_quality_label(data_quality)
+    alert_confidence_text = alert_confidence_label(alert_confidence)
 
     derived["loadQualityScore"] = int(round(load_score))
     derived["loadQualityLevel"] = load_level
@@ -567,13 +648,42 @@ def annotate_payload_quality(payload):
     derived["hazardQualityLevel"] = hazard_level
     derived["hazardQualityColor"] = quality_color(hazard_score)
     derived["dataStatusLabel"] = data_status
+    derived["dataQuality"] = data_quality
+    derived["dataQualityLabel"] = data_status
+    derived["alertConfidence"] = alert_confidence
+    derived["alertConfidenceLabel"] = alert_confidence_text
+    derived["lastSuccessfulUpdateAgeHours"] = round(age_h, 2) if is_num(age_h) else None
+    derived["usedFallbackNowInstance"] = fallback_used
+    derived["nowDataAvailable"] = "missing_now_fields" not in quality_flags
+
+    meta["dataQuality"] = data_quality
+    meta["alertConfidence"] = alert_confidence
+    meta["lastSuccessfulUpdateAgeHours"] = round(age_h, 2) if is_num(age_h) else None
 
     base_msg = output.get("message")
     if isinstance(base_msg, str) and base_msg.strip():
-        base_main = base_msg.split(" LQ:")[0].split(" HQ:")[0].split(" D:")[0].strip()
-        output["message"] = f"{base_main} {build_quality_tag(load_level, 'LQ')} {build_quality_tag(hazard_level, 'HQ')} D:{data_status}"
+        base_main = (
+            base_msg.split(" LQ:")[0]
+            .split(" HQ:")[0]
+            .split(" DQ:")[0]
+            .split(" AC:")[0]
+            .split(" D:")[0]
+            .strip()
+        )
+        output["message"] = (
+            f"{base_main} {build_quality_tag(load_level, 'LQ')} {build_quality_tag(hazard_level, 'HQ')} "
+            f"DQ:{data_status} AC:{alert_confidence_text[:1]}"
+        )
 
-    output["phase"] = sanitize_phase_text(output.get("phase"))
+    phase0 = sanitize_phase_text(output.get("phase"))
+    if data_quality == "stale":
+        if not phase0.startswith("STALE ("):
+            output["phase"] = sanitize_phase_text(f"STALE ({phase0})")
+        else:
+            output["phase"] = phase0
+    else:
+        output["phase"] = phase0
+
     payload["derived"] = derived
     payload["output"] = output
     payload["meta"] = meta
@@ -638,6 +748,12 @@ def write_summary_file(payload):
         "hazardQualityScore": derived.get("hazardQualityScore"),
         "hazardQualityLevel": derived.get("hazardQualityLevel"),
         "dataStatusLabel": derived.get("dataStatusLabel"),
+        "dataQuality": derived.get("dataQuality"),
+        "dataQualityLabel": derived.get("dataQualityLabel"),
+        "alertConfidence": derived.get("alertConfidence"),
+        "alertConfidenceLabel": derived.get("alertConfidenceLabel"),
+        "lastSuccessfulUpdateAgeHours": derived.get("lastSuccessfulUpdateAgeHours"),
+        "usedFallbackNowInstance": derived.get("usedFallbackNowInstance"),
     }
 
     save_json(SUMMARY_FILE, summary)
