@@ -97,6 +97,9 @@ BACKFILL_MAX_INSTANCES = 2
 BACKFILL_REQUEST_RETRIES = 1
 INSTANCE_CHECK_CONNECT_TIMEOUT = float(os.getenv("PITERAQ_INSTANCE_CHECK_CONNECT_TIMEOUT", "5"))
 INSTANCE_CHECK_READ_TIMEOUT = float(os.getenv("PITERAQ_INSTANCE_CHECK_READ_TIMEOUT", "8"))
+EXTRA_PROBE_CONNECT_TIMEOUT = float(os.getenv("PITERAQ_EXTRA_PROBE_CONNECT_TIMEOUT", "4"))
+EXTRA_PROBE_READ_TIMEOUT = float(os.getenv("PITERAQ_EXTRA_PROBE_READ_TIMEOUT", "6"))
+EXTRA_PROBE_SLEEP = float(os.getenv("PITERAQ_EXTRA_PROBE_SLEEP", "0.2"))
 
 SEA_POINTS_BACKFILL = [
     {"name": "W3", "lon": -32.5, "lat": 64.8},
@@ -832,46 +835,87 @@ def choose_reachable_instance(candidates, label="instance"):
 
     return None
 
+def fetch_probe_position(instance_id, lon, lat, parameter_names):
+    """Very cheap no-retry probe used only before extra fallback full fetch."""
+    global _global_request_count, _global_rate_limit_hits
+
+    if _global_request_count >= _global_request_budget:
+        raise RuntimeError("probe request budget exhausted")
+    if _global_rate_limit_hits >= _global_rate_limit_threshold:
+        raise RuntimeError("probe blocked by circuit breaker")
+
+    url = f"{BASE}/collections/{COL}/instances/{instance_id}/position"
+    params = {
+        "coords": f"POINT({lon} {lat})",
+        "parameter-name": ",".join(parameter_names),
+        "crs": "crs84",
+        "f": "CoverageJSON",
+    }
+
+    time.sleep(min(EXTRA_PROBE_SLEEP, REQUEST_SLEEP))
+    _global_request_count += 1
+    r = requests.get(url, params=params, timeout=(EXTRA_PROBE_CONNECT_TIMEOUT, EXTRA_PROBE_READ_TIMEOUT))
+
+    if r.status_code == 429:
+        _global_rate_limit_hits += 1
+        raise RuntimeError("probe_rate_limited")
+    if r.status_code == 502:
+        raise RuntimeError("probe_bad_gateway")
+
+    r.raise_for_status()
+    return r.json()
+
+
 def instance_has_now_probe(instance_id, target_dt, tolerance_hours=TIME_TOLERANCE_HOURS):
-    """Cheap probe to avoid a full extra-fallback fetch when now-fields are clearly unavailable."""
+    """Strict probe: allow extra fallback full fetch only when both an ice point and a sea point expose near-now numeric fields."""
+    if _global_rate_limit_hits > 0:
+        print(f"Skipping extra now probe for {instance_id}: rate limiting already observed")
+        return False
+
     probe_specs = [
-        ("ice", ICE_POINTS[0], ["pressure-sealevel", "temperature-2m", "wind-speed-100m"]),
-        ("sea", SEA_POINTS_BACKFILL[1], ["pressure-sealevel"]),
+        ("ice", ICE_POINTS[0], ["pressure-sealevel", "temperature-2m", "wind-speed-100m", "wind-direction-100m"]),
+        ("sea", SEA_POINTS_BACKFILL[1], ["pressure-sealevel", "temperature-2m"]),
     ]
 
-    valid_times = []
+    successes = 0
     for label, point, params in probe_specs:
         try:
-            data = fetch_position(instance_id, point["lon"], point["lat"], params, retries=BACKFILL_REQUEST_RETRIES)
+            data = fetch_probe_position(instance_id, point["lon"], point["lat"], params)
             if not isinstance(data, dict):
                 print(f"Extra now probe for {instance_id} returned no data at {label}:{point['name']}")
                 return False
+
             times, values = parse_coverage_series(data, params)
             if not times:
                 print(f"Extra now probe for {instance_id} found no valid times at {label}:{point['name']}")
                 return False
+
             probe_axis = []
             for t in times:
                 try:
                     probe_axis.append({"validTime": t, "dt": parse_iso(t)})
                 except Exception:
                     continue
+
             valid_time, _, diff_h = find_valid_time(probe_axis, target_dt, tolerance_hours=tolerance_hours)
             if valid_time is None:
                 print(f"Extra now probe for {instance_id} found no near-now timestep at {label}:{point['name']}")
                 return False
 
-            # Require at least one numeric value among requested parameters at the chosen time.
             idx = times.index(valid_time)
-            if not any(is_num(safe_get(values.get(param, []), idx)) for param in params):
-                print(f"Extra now probe for {instance_id} found no numeric values at {label}:{point['name']}")
+            numeric_count = sum(1 for param in params if is_num(safe_get(values.get(param, []), idx)))
+            min_required = 2 if label == "ice" else 1
+            if numeric_count < min_required:
+                print(f"Extra now probe for {instance_id} found too few numeric values at {label}:{point['name']} ({numeric_count})")
                 return False
-            valid_times.append((label, point["name"], valid_time, diff_h))
+
+            print(f"Extra now probe ok for {instance_id} at {label}:{point['name']} ({valid_time}, diff {diff_h:.2f}h)")
+            successes += 1
         except Exception as e:
-            print(f"Extra now probe failed for {instance_id} at {label}:{point['name']}: {type(e).__name__}")
+            print(f"Extra now probe failed for {instance_id} at {label}:{point['name']}: {type(e).__name__}: {e}")
             return False
 
-    return bool(valid_times)
+    return successes == len(probe_specs)
 
 
 def fetch_points_parallel(instance_id, points, parameter_names, max_workers=MAX_WORKERS, retries=REQUEST_RETRIES):
@@ -1865,22 +1909,25 @@ def build_payload(now_dt):
             max_rate_limit_hits=FALLBACK_MAX_RATE_LIMIT_HITS,
         )
         selected_extra = choose_reachable_instance([extra_now_instance], label="extra now fallback")
-        if selected_extra and instance_has_now_probe(selected_extra, now_dt, tolerance_hours=9.0):
-            trial_cache = build_empty_cache()
-            trial_errors = append_instance_to_cache(trial_cache, selected_extra, request_retries=BACKFILL_REQUEST_RETRIES)
-            trial_valid_now, trial_dt_now, trial_diff_now, trial_now_fields = find_best_valid_time_with_fields(
-                trial_cache, now_dt, tolerance_hours=9.0
-            )
-            if trial_now_fields is not None:
-                chosen_instance = selected_extra
-                cache = trial_cache
-                fetch_errors_now = trial_errors
-                valid_now = trial_valid_now
-                dt_now = trial_dt_now
-                diff_now = trial_diff_now
-                now_fields = trial_now_fields
-        elif selected_extra:
-            print(f"Skipping extra now fallback {selected_extra}: now-field probe failed")
+        if selected_extra:
+            if instance_has_now_probe(selected_extra, now_dt, tolerance_hours=9.0):
+                trial_cache = build_empty_cache()
+                trial_errors = append_instance_to_cache(trial_cache, selected_extra, request_retries=BACKFILL_REQUEST_RETRIES)
+                trial_valid_now, trial_dt_now, trial_diff_now, trial_now_fields = find_best_valid_time_with_fields(
+                    trial_cache, now_dt, tolerance_hours=9.0
+                )
+                if trial_now_fields is not None:
+                    chosen_instance = selected_extra
+                    cache = trial_cache
+                    fetch_errors_now = trial_errors
+                    valid_now = trial_valid_now
+                    dt_now = trial_dt_now
+                    diff_now = trial_diff_now
+                    now_fields = trial_now_fields
+                else:
+                    print(f"Skipping extra now fallback {selected_extra}: full fetch still lacked now-fields")
+            else:
+                print(f"Skipping extra now fallback {selected_extra}: strict now-field probe failed")
 
     if valid_now is None or now_fields is None:
         prev = load_json(DATA_FILE, {})
