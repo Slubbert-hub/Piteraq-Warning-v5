@@ -696,7 +696,7 @@ def build_empty_cache():
             "rows": [],
         }
 
-    for p in sea_points + coast_points:
+    for p in SEA_POINTS + COAST_POINTS:
         merged["sea"][p["name"]] = {
             "lon": p["lon"],
             "lat": p["lat"],
