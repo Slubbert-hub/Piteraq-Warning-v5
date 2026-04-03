@@ -312,6 +312,7 @@
       <div id="risk-phase" class="phase">—</div>
       <div id="risk-watch" class="watch">Watch —</div>
       <div id="quality-badges" class="qual-row"></div>
+      <div id="quality-note" class="watch">Datagrunnlag —</div>
 
       <div id="msg-box" class="msg-box">Laster …</div>
 
@@ -413,6 +414,34 @@
       return `<span class="qual-badge ${cls}">${label} ${lvl}${extra}</span>`;
     }
 
+
+    function stateBadge(label, state, cls) {
+      return `<span class="qual-badge ${cls}">${label} ${state}</span>`;
+    }
+
+    function dataQualityClass(label) {
+      const v = String(label || 'STALE').toUpperCase();
+      if (v === 'FRESH') return 'GRN';
+      if (v === 'DEGRADED') return 'YEL';
+      return 'ORG';
+    }
+
+    function confidenceClass(label) {
+      const v = String(label || 'LOW').toUpperCase();
+      if (v === 'HIGH') return 'GRN';
+      if (v === 'MEDIUM' || v === 'MED') return 'YEL';
+      return 'ORG';
+    }
+
+    function qualityExplanation(dataQuality, alertConfidence, ageHours) {
+      const dq = String(dataQuality || 'stale').toLowerCase();
+      const ac = String(alertConfidence || 'low').toLowerCase();
+      const ageTxt = isNum(ageHours) ? ` · siste vellykkede data ${fmt1(ageHours)} t gamle` : '';
+      if (dq === 'fresh') return `Ferskt datagrunnlag · varselkonfidens ${ac.toUpperCase()}${ageTxt}`;
+      if (dq === 'degraded') return `Redusert datagrunnlag · farevurdering beregnet med lavere robusthet · varselkonfidens ${ac.toUpperCase()}${ageTxt}`;
+      return `Siste kjente vurdering · ingen fersk nåvurdering fra DMI · varselkonfidens ${ac.toUpperCase()}${ageTxt}`;
+    }
+
     function metricCard({ label, value, desc = '', tiny = '' }) {
       return `
         <div class="metric">
@@ -464,8 +493,6 @@ function buildCompactMessage(data) {
       const location = meta.location || data.location || 'TASIILAQ';
       const updatedAt = meta.updatedAt || data.updatedAt || '–';
       const ageMin = updatedAt !== '–' ? (Date.now() - new Date(updatedAt).getTime()) / 60000 : 0;
-      const staleEl = document.getElementById('stale-warning');
-      if (staleEl) staleEl.style.display = ageMin > 120 ? 'block' : 'none';
       const model = meta.model || data.model || '–';
 
       const level = output.level || data.level || 'GRN';
@@ -479,7 +506,26 @@ function buildCompactMessage(data) {
       const hazardQualityLevel = derived.hazardQualityLevel || data.hazardQualityLevel || 'LOW';
       const loadQualityScore = derived.loadQualityScore ?? data.loadQualityScore;
       const hazardQualityScore = derived.hazardQualityScore ?? data.hazardQualityScore;
-      const dataStatusLabel = derived.dataStatusLabel || data.dataStatusLabel || (meta.stale ? 'STALE' : 'FRESH');
+      const dataQuality = derived.dataQuality || data.dataQuality || (meta.stale ? 'stale' : 'fresh');
+      const dataQualityLabel = derived.dataQualityLabel || data.dataQualityLabel || String(dataQuality).toUpperCase();
+      const alertConfidence = derived.alertConfidence || data.alertConfidence || (meta.stale ? 'low' : 'high');
+      const alertConfidenceLabel = derived.alertConfidenceLabel || data.alertConfidenceLabel || String(alertConfidence).toUpperCase();
+      const lastSuccessAgeHours = derived.lastSuccessfulUpdateAgeHours ?? data.lastSuccessfulUpdateAgeHours ?? meta.lastSuccessfulUpdateAgeHours;
+
+      const staleEl = document.getElementById('stale-warning');
+      if (staleEl) {
+        if (String(dataQuality).toLowerCase() === 'stale') {
+          staleEl.style.display = 'block';
+          staleEl.style.background = '#ff6b6b';
+          staleEl.textContent = '⚠️ Ingen fersk DMI-nåvurdering — appen viser siste kjente vurdering';
+        } else if (String(dataQuality).toLowerCase() === 'degraded') {
+          staleEl.style.display = 'block';
+          staleEl.style.background = '#f1c232';
+          staleEl.textContent = '⚠️ Redusert datagrunnlag — farevurderingen er beregnet med lavere robusthet';
+        } else {
+          staleEl.style.display = 'none';
+        }
+      }
 
       document.getElementById('hero-location').textContent = location;
       document.getElementById('hero-updated').textContent = `Oppdatert ${updatedAt}`;
@@ -493,11 +539,13 @@ function buildCompactMessage(data) {
 
       document.getElementById('risk-phase').textContent =
         `LOAD ${loadLevel} · PIT ${pitLevel}`;
-      document.getElementById('risk-watch').textContent = '';
+      document.getElementById('risk-watch').textContent = phase || '';
+      document.getElementById('quality-note').textContent = qualityExplanation(dataQuality, alertConfidence, lastSuccessAgeHours);
       document.getElementById('quality-badges').innerHTML = [
         qualityBadge('LOAD-kvalitet', loadQualityLevel, loadQualityScore),
         qualityBadge('Farekvalitet', hazardQualityLevel, hazardQualityScore),
-        `<span class="qual-badge ${dataStatusLabel === 'FRESH' ? 'GRN' : 'ORG'}">Data ${dataStatusLabel}</span>`
+        stateBadge('Data', dataQualityLabel, dataQualityClass(dataQualityLabel)),
+        stateBadge('Konfidens', alertConfidenceLabel, confidenceClass(alertConfidenceLabel))
       ].join('');
 
       const trendText = derived.trendDataStatus || data.trendDataStatus || '–';
@@ -509,8 +557,8 @@ function buildCompactMessage(data) {
         ? derived.qualityFlags
         : (Array.isArray(data.qualityFlags) ? data.qualityFlags : []);
       const qualityEl = document.getElementById('quality-status');
-      qualityEl.textContent = `Datakvalitet: LOAD ${loadQualityLevel} · HAZARD ${hazardQualityLevel} · ${qFlags.length ? qFlags.join(', ') : 'OK'}`;
-      qualityEl.className = qFlags.length ? 'warn' : 'ok';
+      qualityEl.textContent = `Datakvalitet: ${dataQualityLabel} · varselkonfidens ${alertConfidenceLabel} · LOAD ${loadQualityLevel} · HAZARD ${hazardQualityLevel}${qFlags.length ? ` · ${qFlags.join(', ')}` : ''}`;
+      qualityEl.className = String(dataQuality).toLowerCase() === 'fresh' && !qFlags.length ? 'ok' : 'warn';
 
       document.getElementById('last-success').textContent =
         `Sist vellykket oppdatert: ${meta.lastSuccessfulUpdate || meta.updatedAt || data.updatedAt || '–'}`;
