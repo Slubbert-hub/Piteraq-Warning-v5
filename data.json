@@ -1,13 +1,13 @@
 {
   "meta": {
     "source": "DMI HARMONIE",
-    "updatedAt": "2026-04-02 23:44 UTC",
+    "updatedAt": "2026-04-03 00:21 UTC",
     "location": "TASIILAQ",
     "model": "harmonie_ig_sf",
-    "forecastInfo": "Now-felt manglet i DMI; beholdt siste gyldige datasett",
+    "forecastInfo": "Latest update failed: NameError",
     "instanceId": "2026-04-02T120000Z",
     "lastSuccessfulUpdate": "2026-04-02 16:14 UTC",
-    "lastAttemptFailed": "missing_now_fields",
+    "lastAttemptFailed": "NameError",
     "stale": true
   },
   "inputs": {
@@ -123,7 +123,7 @@
     "lpOffsetHpa": -0.8,
     "lpDistanceKm": 35.9,
     "accUncertain": false,
-    "trendDataStatus": "stale: missing_now_fields",
+    "trendDataStatus": "stale: NameError",
     "qualityFlags": [
       "lp_favored_alignment",
       "lp_near_favored_sector",
@@ -161,7 +161,7 @@
   },
   "output": {
     "level": "GRN",
-    "phase": "STALE (PITERAQ LOW))",
+    "phase": "STALE (PITERAQ LOW)",
     "message": "GRN4 LOADLOW PITGRN H24-48T RES10 TRG4 CPL52 GR4.3 LPV-14E LPD0 VG-2 CG2 LQ:L HQ:L D:STALE"
   }
 }
