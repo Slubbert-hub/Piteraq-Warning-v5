@@ -76,14 +76,14 @@ ICE_PARAMS_CORE = [
     "pressure-sealevel",
     "temperature-2m",
     "wind-speed-100m",
-    "wind-direction-100m",
-    "total-cloud-cover",
+    "wind-dir-100m",            # confirmed valid in harmonie_ig_sf
+    "fraction-of-cloud-cover",  # confirmed valid in harmonie_ig_sf (0-1 scale)
 ]
 ICE_PARAMS = ICE_PARAMS_CORE
 SEA_PARAMS = ["pressure-sealevel", "temperature-2m"]
 
 # Optional extra-path retained for future experiments, but not used in build_payload
-ICE_PARAMS_EXTRA = ["total-cloud-cover"]
+ICE_PARAMS_EXTRA = ["fraction-of-cloud-cover"]
 EXTRA_REQUEST_SLEEP = 0.6
 EXTRA_REQUEST_RETRIES = 1
 ENABLE_BONUS_FETCH = False
@@ -1092,7 +1092,8 @@ def append_instance_to_cache(cache, iid, sea_points=None, coast_points=None, req
                         "pressure-sealevel": safe_get(values.get("pressure-sealevel", []), i),
                         "temperature-2m": safe_get(values.get("temperature-2m", []), i),
                         "wind-speed-100m": safe_get(values.get("wind-speed-100m", []), i),
-                        "wind-direction-100m": safe_get(values.get("wind-direction-100m", []), i),
+                        "wind-dir-100m": safe_get(values.get("wind-dir-100m", []), i),
+                        "fraction-of-cloud-cover": safe_get(values.get("fraction-of-cloud-cover", []), i),
                     }
                 )
         except Exception as e:
@@ -1348,8 +1349,8 @@ def fields_for_valid_time(cache, valid_time):
         p = row.get("pressure-sealevel")
         t = row.get("temperature-2m")
         w = row.get("wind-speed-100m")
-        wd = row.get("wind-direction-100m")
-        cc = row.get("total-cloud-cover")
+        wd = row.get("wind-dir-100m")
+        cc = row.get("fraction-of-cloud-cover")
 
         pressure_vals.append((p / 100.0) if is_num(p) else None)
         temp_vals.append(kelvin_to_celsius(t) if is_num(t) else None)
