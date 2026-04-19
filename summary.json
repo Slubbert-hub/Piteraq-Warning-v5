@@ -1,5 +1,5 @@
 {
-  "updatedAt": "2026-04-18 23:45 UTC",
+  "updatedAt": "2026-04-19 03:42 UTC",
   "location": "TASIILAQ",
   "model": "harmonie_ig_sf",
   "instanceId": "2026-04-18T120000Z",
@@ -67,6 +67,6 @@
   "dataQualityLabel": "STALE",
   "alertConfidence": "low",
   "alertConfidenceLabel": "LOW",
-  "lastSuccessfulUpdateAgeHours": 3.98,
+  "lastSuccessfulUpdateAgeHours": 7.93,
   "usedFallbackNowInstance": null
 }
